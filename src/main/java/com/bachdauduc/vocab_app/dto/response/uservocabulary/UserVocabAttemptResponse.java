@@ -22,6 +22,7 @@ public class UserVocabAttemptResponse {
     String userVocabId;
     ExerciseType exerciseType;
     String userAnswer;
+    String review;
     Boolean correct;
     Integer replayCount;
     LocalDateTime createdAt;

@@ -16,7 +16,7 @@ The backend is a Spring Boot vocabulary learning API for:
 | Vocabulary saving | save a word sense/localized sense, review scheduling, attempts, history |
 | Review exercises | generate vocabulary review quizzes and submit attempts |
 | Listen-and-type | categories, lesson list, lesson detail, progress, submit listen challenge attempt |
-| Learning resources | insert IELTS reading source; other endpoints are placeholders |
+| Learning resources | IELTS reading source list/detail quiz retrieval; IELTS writing topics/problems/references/review; some insert/generate endpoints are placeholders |
 | Notifications | send email/push notification through templates |
 | Streak | Entity/API not implemented in current backend code |
 | Push token registration | Entity exists, but registration API not implemented in current backend code |
@@ -32,6 +32,7 @@ Backend facts:
 | Local base URL | `http://localhost:8080/vocab-learning` |
 | Database | MySQL, database name `vocab_app` |
 | Cache | Redis |
+| Groq API key | `GROK_API_KEY` through `grok.api.key`; must be set in the environment of the running Spring Boot process before startup |
 | Auth | JWT Bearer token, HS512 signed |
 | CORS | Only `http://localhost:5173`, credentials allowed |
 | Timezone config | `Asia/Ho_Chi_Minh` |
@@ -66,6 +67,8 @@ Public endpoints from `SecurityConfig`:
 | `GET /word-data/words/by-level` | No |
 | `GET /word-data/categories` | No |
 | `GET /learning-resources/ielts-reading-sources` | No |
+| `GET /learning-resources/ielts-reading-sources/categories` | No |
+| `GET /learning-resources/ielts-reading-sources/by-category` | No |
 | `GET /exercises/listen-and-type/categories` | No |
 | `GET /exercises/listen-and-type/sub-categories` | No |
 | `GET /exercises/listen-and-type/lessons` | No |
@@ -192,6 +195,10 @@ Only frontend-relevant fields are listed. Sensitive fields such as `passwordHash
 | `ListenExercise` / `listen_exercise` | `lessonId`, `title`, `categoryId`, `subCategory`, `fullDocument`, `speechToTextLangCode`, `audioUrl`, `learningResourceType` |
 | `ListenAndTypeExerciseChallenge` / `listen_and_type_exercise_challenges` | `id`, `listenExerciseId`, `position`, `content`, `jsonContent`, `timeStart`, `timeEnd`, `hints`, `audioSrc`; backend currently also returns `solution` |
 | `IeltsReadingSource` / `ielts_reading_sources` | `id`, `name`, `title`, `categoryId`, `content`, `createdAt`, `updatedAt` |
+| `IeltsReadingQuizGroup` / `ielts_reading_quiz_groups` | `id`, `readingSourceId`, `quizType`, `groupOrder`, `instruction`, `questionNumberStart`, `questionNumberEnd`, `wordLimit`, `sourceParagraphId`, `sharedOptions` |
+| `IeltsReadingQuestion` / `ielts_reading_questions` | `id`, `groupId`, `readingSourceId`, `questionNumber`, `stem`, `options`, `answer`, `sourceParagraphId`, `evidenceQuote`, `explanation`, `createdAt` |
+| `IeltsWritingExercise` / `ielts_writing_exercise` | `id`, `problem`, `problemTopic`, `taskType`, `evaluationPrompt`, `imageUrl`, `imageDescription`, `createdAt`, `updatedAt` |
+| `IeltsWritingReference` / `ielts_writing_reference` | `id`, `ieltsWritingExerciseId`, `essay`, `band`, `createdAt`, `updatedAt` |
 | `NotificationTemplate` / `notification_templates` | `id`, `actionType`, `template` |
 | `UserPushToken` / `user_push_tokens` | Entity exists with `id`, `userId`, `deviceName`, `createdAt`; no public response DTO/API found |
 
@@ -415,6 +422,15 @@ Review quiz exhaustion behavior:
 | Method | Path | Auth | Request | Response result | Common errors | Frontend notes |
 |---|---|---|---|---|---|---|
 | GET | `/learning-resources/ielts-reading-sources` | No | `page=0`, `limit=20` | `Page<IeltsReadingSourceResponse>` | Auth errors | Public paginated list of IELTS reading resources |
+| GET | `/learning-resources/ielts-reading-sources/categories` | No | None | `string[]` | Auth errors | Distinct `name` values from IELTS reading resources |
+| GET | `/learning-resources/ielts-reading-sources/by-category` | No | `name`, `page=0`, `limit=20` | `Page<IeltsReadingSourceResponse>` | Auth errors | Public paginated list filtered by exact `name` |
+| GET | `/learning-resources/ielts-reading-sources/{readingId}/quiz` | Yes | Path `readingId`, query `userId` | `IeltsReadingQuizResponse` | `IELTS_READING_SOURCE_NOT_FOUND`, auth errors | Reads Redis key `reading_quiz:<readingId>`; on miss joins quiz groups and questions, caches quiz without user-specific completed ids, then adds `completed_question_ids` from `user_vocab_attempts.attempt_id` |
+| GET | `/learning-resources/ielts-writing/topics` | Yes | `taskType` | `string[]` | Auth errors | Distinct `problem_topic` values for the task type |
+| GET | `/learning-resources/ielts-writing/problems` | Yes | `topic_name` or `topicName` | `IeltsWritingProblemSummaryResponse[]` | Auth errors | Problems for one exact `problem_topic`; each item has `id` and `problem` |
+| GET | `/learning-resources/ielts-writing/problems/{problemId}` | Yes | Path `problemId` | `IeltsWritingExercise` | `IELTS_WRITING_EXERCISE_NOT_FOUND`, auth errors | Returns the writing exercise entity, including `evaluationPrompt` |
+| GET | `/learning-resources/ielts-writing/problems/{problemId}/bands` | Yes | Path `problemId` | `string[]` | Auth errors | Distinct non-empty `band` values for references of the problem |
+| GET | `/learning-resources/ielts-writing/problems/{problemId}/references` | Yes | Path `problemId`, query `band` | `IeltsWritingReference[]` | Auth errors | References filtered by `ielts_writing_exercise_id` and exact `band` |
+| POST | `/learning-resources/ielts-writing/reviews` | Yes | `IeltsWritingReviewRequest` | `string` JSON | `IELTS_WRITING_EXERCISE_NOT_FOUND`, `INVALID_WRITING_REVIEW_REQUEST`, `WRITING_REVIEW_FAILED`, auth errors | Finds `ielts_writing_exercise` by `exerciseId`, combines strict reviewer prompt with `evaluationPrompt` and `userAnswer`, calls Groq `openai/gpt-oss-120b`, returns model JSON string |
 | POST | `/learning-resources/ielts-reading-sources` | Yes | `InsertIeltsReadingSourceRequest` | `IeltsReadingSourceResponse` | `CATEGORY_NOT_FOUND`, validation | Admin/import-like API |
 | POST | `/learning-resources/listen-exercises` | Yes | None | `string` | Auth errors | Placeholder only |
 | POST | `/learning-resources/quizzes/listen-and-type` | Yes | None | `string` | Auth errors | Placeholder only |
@@ -862,6 +878,93 @@ export interface IeltsReadingSourceResponse {
   createdAt?: string | null;
   updatedAt?: string | null;
 }
+export interface IeltsReadingQuizResponse {
+  quiz?: IeltsReadingQuiz | null;
+  id?: string | null;
+  completed_question_ids?: string[] | null;
+}
+
+export interface IeltsReadingQuiz {
+  title?: string | null;
+  module?: string | null;
+  passage_analysis?: IeltsReadingPassageAnalysis | null;
+  question_groups?: IeltsReadingQuestionGroup[] | null;
+  id?: string | null;
+}
+
+export interface IeltsReadingPassageAnalysis {
+  paragraph_count?: number | null;
+  text_type?: string | null;
+  writer_view_present?: boolean | null;
+  process_present?: boolean | null;
+  multi_entity_present?: boolean | null;
+  selected_question_types?: IeltsReadingQuestionType[] | null;
+}
+
+export type IeltsReadingQuestionType =
+  | 'matching_features'
+  | 'matching_headings'
+  | 'matching_information'
+  | 'multiple_choice_multiple'
+  | 'multiple_choice_single'
+  | 'sentence_completion'
+  | 'short_answer'
+  | 'summary_completion'
+  | 'true_false_not_given'
+  | 'yes_no_not_given';
+
+export interface IeltsReadingQuestionGroup {
+  group_id?: string | null;
+  question_type?: IeltsReadingQuestionType | string | null;
+  instruction?: string | null;
+  question_number_start?: number | null;
+  question_number_end?: number | null;
+  context?: string | null;
+  allow_option_reuse?: boolean | null;
+  word_limit?: string | null;
+  source_paragraph_ids?: string[] | null;
+  shared_options?: string[] | null;
+  questions?: IeltsReadingQuestion[] | null;
+}
+
+export interface IeltsReadingQuestion {
+  question_id?: string | null;
+  number?: number | null;
+  stem?: string | null;
+  options?: string[] | null;
+  answer?: string[] | null;
+  source_paragraph_id?: string | null;
+  evidence_quote?: string | null;
+  explanation?: string | null;
+  difficulty?: string | null;
+  skill?: string | null;
+}
+
+export interface IeltsWritingProblemSummaryResponse {
+  id?: string | null;
+  problem?: string | null;
+}
+
+export interface IeltsWritingExercise {
+  id?: string | null;
+  problem?: string | null;
+  problemTopic?: string | null;
+  taskType?: number | null;
+  evaluationPrompt?: string | null;
+  imageUrl?: string | null;
+  imageDescription?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface IeltsWritingReference {
+  id?: string | null;
+  ieltsWritingExerciseId?: string | null;
+  essay?: string | null;
+  band?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
 ```
 
 Request interfaces:
@@ -930,6 +1033,11 @@ export interface UserSearchHistoryRequest {
   wordId: string;
 }
 
+export interface IeltsWritingReviewRequest {
+  exerciseId: string;
+  userId: string;
+  userAnswer: string;
+}
 export interface UserLessonRequest {
   userId: string;
   lessonId: string;
@@ -986,6 +1094,11 @@ Recommended handling:
 | `2018` | Review size must be 30, 60, or 90 |
 | `2019` | Current review exhausted; tell user to wait or choose another word set |
 | `2020`, `2011` | Quiz cannot be generated due missing data |
+| `2024` | IELTS reading source not found |
+| `2025` | IELTS writing exercise not found |
+| `2026` | Invalid writing review request |
+| `2027` | Writing review failed |
+| `2028` | Groq API key is not configured |
 | `3001`-`3004` | Notification send failed; do not block core learning flow unless required |
 
 Always show `traceId` in developer/debug surfaces so backend logs can be matched.
@@ -1020,6 +1133,9 @@ Build a frontend that supports:
 - Word detail using /word-data/word with senses, examples inside each sense, sounds, forms, relation, idioms.
 - Save vocabulary by sending exactly one of senseId or senseLocalizedId.
 - Review sessions using /exercises/vocab-review and submit attempts with /user-vocabularies/review-attempts.
+- IELTS reading resource list and quiz rendering using /learning-resources/ielts-reading-sources and /learning-resources/ielts-reading-sources/{readingId}/quiz.
+- IELTS writing browse flow using /learning-resources/ielts-writing/topics, /problems, /problems/{problemId}/bands, and /references.
+- IELTS writing review using POST /learning-resources/ielts-writing/reviews with exerciseId, userId, and userAnswer; result is a JSON string from Groq.
 - Listen-and-type flow: categories, lessons, lesson detail, progress, submit LAT_LISTEN_AND_TYPE attempts.
 - Search history, attempts, daily statistics, overall statistics.
 

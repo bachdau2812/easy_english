@@ -39,6 +39,9 @@ public class RedisKeyProperties {
     @Value("${redis.key.current-review-wrong}")
     private String currentReviewWrongPattern;
 
+    @Value("${redis.key.reading-quiz}")
+    private String readingQuizPattern;
+
     @Value("${redis.ttl.pre-register-minutes}")
     private long preRegisterTtlMinutes;
 
@@ -95,6 +98,10 @@ public class RedisKeyProperties {
 
     public String currentReviewWrongKey(String userVocabId) {
         return currentReviewWrongPattern.formatted(userVocabId);
+    }
+
+    public String readingQuizKey(String readingSourceId) {
+        return readingQuizPattern.formatted(readingSourceId);
     }
 
     public Duration preRegisterTtl() {

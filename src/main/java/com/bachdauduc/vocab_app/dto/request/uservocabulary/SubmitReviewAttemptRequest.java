@@ -22,6 +22,8 @@ public class SubmitReviewAttemptRequest {
 
     String userAnswer;
 
+    String review;
+
     @NotNull
     Boolean correct;
 

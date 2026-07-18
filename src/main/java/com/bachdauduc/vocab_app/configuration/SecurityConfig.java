@@ -64,7 +64,10 @@ public class SecurityConfig {
     private static final String[] PUBLIC_GET_ENDPOINT = {
             "/word-data/word",
             "/word-data/words/search",
-            "/word-data/words/basic-search"
+            "/word-data/words/basic-search",
+            "/learning-resources/ielts-reading-sources",
+            "/learning-resources/ielts-reading-sources/categories",
+            "/learning-resources/ielts-reading-sources/by-category"
     };
 
     @Value("${jwt.signerKey}")

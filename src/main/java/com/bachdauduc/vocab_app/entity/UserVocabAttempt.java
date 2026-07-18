@@ -41,6 +41,9 @@ public class UserVocabAttempt {
     @Column(name = "user_answer", columnDefinition = "TEXT")
     private String userAnswer;
 
+    @Column(name = "review", columnDefinition = "TEXT")
+    private String review;
+
     @Column(name = "is_correct", nullable = false)
     private Boolean correct;
 

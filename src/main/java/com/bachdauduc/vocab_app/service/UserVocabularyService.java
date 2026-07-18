@@ -105,6 +105,7 @@ public class UserVocabularyService {
         attempt.setUserVocabId(request.getUserVocabId());
         attempt.setExerciseType(request.getExerciseType());
         attempt.setUserAnswer(request.getUserAnswer());
+        attempt.setReview(request.getReview());
         attempt.setCorrect(request.getCorrect());
         attempt.setReplayCount(request.getReplayCount() == null ? 0 : request.getReplayCount());
 
@@ -567,6 +568,7 @@ public class UserVocabularyService {
                 .userVocabId(attempt.getUserVocabId())
                 .exerciseType(attempt.getExerciseType())
                 .userAnswer(attempt.getUserAnswer())
+                .review(attempt.getReview())
                 .correct(attempt.getCorrect())
                 .replayCount(attempt.getReplayCount())
                 .createdAt(attempt.getCreatedAt())
@@ -581,6 +583,7 @@ public class UserVocabularyService {
                 .userVocabId(projection.getUserVocabId())
                 .exerciseType(ExerciseType.valueOf(projection.getExerciseType()))
                 .userAnswer(projection.getUserAnswer())
+                .review(projection.getReview())
                 .correct(projection.getCorrect())
                 .replayCount(projection.getReplayCount())
                 .createdAt(projection.getCreatedAt())

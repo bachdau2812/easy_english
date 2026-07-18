@@ -1,5 +1,7 @@
 package com.bachdauduc.vocab_app.repository;
 
+import com.bachdauduc.vocab_app.constant.ExerciseType;
+
 import com.bachdauduc.vocab_app.entity.UserVocabAttempt;
 import com.bachdauduc.vocab_app.repository.projection.UserVocabAttemptProjection;
 import com.bachdauduc.vocab_app.repository.projection.UserVocabStatisticProjection;
@@ -15,7 +17,35 @@ import java.util.List;
 
 public interface UserVocabAttemptRepository extends JpaRepository<UserVocabAttempt, String> {
     List<UserVocabAttempt> findByUserIdAndAttemptIdIn(String userId, List<String> attemptIds);
+    List<UserVocabAttempt> findByUserIdAndAttemptIdAndExerciseTypeOrderByCreatedAtDescIdDesc(
+            String userId,
+            String attemptId,
+            ExerciseType exerciseType
+    );
 
+    @Query(value = """
+            SELECT DISTINCT a.attempt_id
+            FROM user_vocab_attempts a
+            WHERE a.user_id = :userId
+                AND a.attempt_id IN (:attemptIds)
+            """, nativeQuery = true)
+    List<String> findCompletedAttemptIds(
+            @Param("userId") String userId,
+            @Param("attemptIds") List<String> attemptIds
+    );
+
+    @Query(value = """
+            SELECT a.attempt_id
+            FROM user_vocab_attempts a
+            WHERE a.user_id = :userId
+                AND a.attempt_id = :attemptId
+                AND a.exercise_type = 'IELTS_WRITING_REVIEW'
+            ORDER BY a.created_at DESC, a.id DESC
+            """, nativeQuery = true)
+    List<String> findAttemptIdsByUserIdAndAttemptId(
+            @Param("userId") String userId,
+            @Param("attemptId") String attemptId
+    );
     @Query(value = """
             SELECT DISTINCT c.id
             FROM listen_and_type_exercise_challenges c
@@ -53,6 +83,7 @@ public interface UserVocabAttemptRepository extends JpaRepository<UserVocabAttem
                         a.user_vocab_id AS userVocabId,
                         a.exercise_type AS exerciseType,
                         a.user_answer AS userAnswer,
+                        a.review AS review,
                         a.is_correct AS correct,
                         a.replay_count AS replayCount,
                         a.created_at AS createdAt

@@ -9,7 +9,8 @@ public enum ExerciseType {
     VOCAB_MEANING_TO_SOUND,
     VOCAB_SENTENCE_TO_MEANING,
     VOCAB_SENTENCE_BLANK_TO_SOUND,
-    LAT_LISTEN_AND_TYPE;
+    LAT_LISTEN_AND_TYPE,
+    IELTS_WRITING_REVIEW;
 
     public boolean isVocab() {
         return name().startsWith("VOCAB_");

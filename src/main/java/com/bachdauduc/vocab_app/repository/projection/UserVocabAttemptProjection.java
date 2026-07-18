@@ -15,6 +15,8 @@ public interface UserVocabAttemptProjection {
 
     String getUserAnswer();
 
+    String getReview();
+
     Boolean getCorrect();
 
     Integer getReplayCount();
