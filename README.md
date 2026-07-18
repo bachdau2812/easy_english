@@ -1,37 +1,156 @@
-# Vocab App 📚✨
+# Vocab App
 
-Vocab App là một ứng dụng học tiếng Anh tập trung vào từ vựng, luyện nghe và ôn tập thông minh. Mục tiêu rất đơn giản: giúp bạn gặp từ mới, hiểu đúng nghĩa, luyện lại nhiều lần và nhớ lâu hơn.
+Vocab App là backend Spring Boot cho ứng dụng học tiếng Anh tập trung vào từ vựng, luyện nghe, ôn tập thông minh và luyện IELTS. Mục tiêu của app là giúp người học tra cứu kỹ hơn, lưu đúng nghĩa cần học, luyện lại bằng nhiều dạng bài và theo dõi tiến độ theo từng lần làm bài.
 
-## Có Gì Hay? 🚀
+## Chức Năng Chính
 
-### Tra Từ Thật Sâu 🔍
+### Tra từ và học từ vựng
 
-Không chỉ xem nghĩa cơ bản, bạn có thể khám phá một từ qua nhiều lớp: nghĩa, ví dụ, bản dịch, phát âm, idiom và các từ liên quan.
+- Tra chi tiết một từ với nghĩa, ví dụ, bản dịch, phát âm, idiom, word form và các từ liên quan.
+- Tìm kiếm từ cơ bản, tìm theo category hoặc CEFR level.
+- Lưu từ theo đúng `senseId` hoặc `senseLocalizedId` để tránh học nhầm nghĩa.
+- Lưu lịch sử tra cứu theo người dùng khi có `userId`.
 
-### Lưu Từ Theo Đúng Nghĩa 🧠
+### Ôn tập bằng quiz
 
-Một từ có thể có nhiều nghĩa, nên app cho phép lưu đúng nghĩa bạn muốn học. Nhờ vậy lúc ôn lại sẽ không bị kiểu “từ quen mà nghĩa lạ”.
+- Tạo quiz ôn tập từ vựng theo nhiều dạng: chọn nghĩa, điền từ, nghe và nhập lại, chọn âm thanh đúng, chọn nghĩa theo câu ví dụ.
+- Ghi nhận attempt, đáp án người dùng, trạng thái đúng/sai và số lần nghe lại.
+- Thống kê theo ngày, tổng quan và danh sách từ hay sai.
+- Hỗ trợ thêm trường `review` trong attempt để lưu nhận xét hoặc kết quả chấm cho các dạng bài cần phản hồi chi tiết.
 
-### Ôn Tập Bằng Quiz 🎯
+### Luyện nghe Listen-and-Type
 
-App tạo nhiều dạng bài để việc học đỡ nhàm chán: chọn nghĩa, điền từ còn thiếu, nghe và nhập lại, chọn âm thanh đúng, chọn nghĩa theo câu ví dụ...
+- Lấy category, sub-category và danh sách lesson.
+- Mở lesson với audio, transcript, challenge theo từng đoạn và tiến độ đã hoàn thành.
+- Nộp kết quả từng challenge bằng `ExerciseType.LAT_LISTEN_AND_TYPE`.
 
-### Luyện Nghe Listen-And-Type 🎧
+### IELTS Reading
 
-Nghe từng đoạn, nhập lại nội dung và theo dõi phần nào đã hoàn thành. Phù hợp để luyện phản xạ nghe, chính tả và khả năng nhận diện từ trong ngữ cảnh.
+- Lấy danh sách nguồn đọc IELTS Reading có phân trang.
+- Lấy danh sách category IELTS Reading và lọc bài đọc theo category.
+- Lấy quiz của một bài đọc theo `readingId`, gồm passage analysis, nhóm câu hỏi, câu hỏi, đáp án, evidence quote và explanation.
+- Trả về `completed_question_ids` theo `userId` để frontend đánh dấu câu đã làm.
+- Cache quiz trong Redis bằng key cấu hình trong `redis_keys.properties`.
 
-### Học Theo Level Và Chủ Đề 🗂️
+### IELTS Writing và AI review
 
-Bạn có thể tìm và học từ theo cấp độ như A1 đến C2, hoặc theo category để học có định hướng hơn.
+- Lấy topic IELTS Writing theo `taskType`.
+- Lấy danh sách đề theo topic và trạng thái `isDone` theo người dùng.
+- Lấy chi tiết đề, danh sách band tham khảo và bài mẫu theo band.
+- Gửi bài viết để AI chấm qua Groq, nhận kết quả review dạng JSON string theo prompt đánh giá IELTS Writing.
+- Lưu lịch sử review vào `user_vocab_attempts` với `ExerciseType.IELTS_WRITING_REVIEW`, gồm `exerciseId`, `userId`, `userAnswer` và `review`.
 
-### Theo Dõi Tiến Bộ 📈
+### Tài nguyên học tập và thông báo
 
-App ghi nhận lượt đúng, lượt sai, các từ hay sai và tiến độ luyện tập, giúp bạn biết mình đang mạnh ở đâu và cần ôn lại chỗ nào.
+- Có API cho learning resources, IELTS Reading source và các placeholder cho luồng tạo quiz/tài nguyên tiếp theo.
+- Hỗ trợ gửi email và push notification qua notification template.
 
-### Bổ Sung Dữ Liệu Linh Hoạt 🌱
+## API Nhanh
 
-Từ vựng có thể được mở rộng thêm bằng ví dụ, bản dịch, âm thanh, idiom và tài nguyên luyện đọc/nghe như IELTS Reading.
+Base URL local:
 
-## Tinh Thần Của App 🌟
+```text
+http://localhost:8080/vocab-learning
+```
 
-Học từ vựng không nên chỉ là nhìn một danh sách dài rồi cố nhồi vào đầu. Vocab App hướng tới cách học dễ thở hơn: tra kỹ hơn, lưu đúng hơn, luyện vui hơn và quay lại ôn đúng lúc hơn.
+Tất cả response được bọc trong `ApiResponse<T>`:
+
+```json
+{
+  "code": 2000,
+  "message": "Success message",
+  "traceId": "trace-id",
+  "result": {}
+}
+```
+
+### IELTS Reading
+
+| Method | Endpoint | Mô tả |
+|---|---|---|
+| `GET` | `/learning-resources/ielts-reading-sources?page=0&limit=20` | Lấy danh sách bài đọc |
+| `GET` | `/learning-resources/ielts-reading-sources/categories` | Lấy danh sách category |
+| `GET` | `/learning-resources/ielts-reading-sources/by-category?name=Science&page=0&limit=20` | Lọc bài đọc theo category |
+| `GET` | `/learning-resources/ielts-reading-sources/{readingId}/quiz?userId={userId}` | Lấy quiz và các câu đã hoàn thành |
+| `POST` | `/learning-resources/ielts-reading-sources` | Thêm IELTS Reading source |
+
+### IELTS Writing
+
+| Method | Endpoint | Mô tả |
+|---|---|---|
+| `GET` | `/learning-resources/ielts-writing/topics?taskType=1` | Lấy topic theo task type |
+| `GET` | `/learning-resources/ielts-writing/problems?topic_name=Education&userId={userId}` | Lấy danh sách đề theo topic |
+| `GET` | `/learning-resources/ielts-writing/problems/{problemId}` | Lấy chi tiết đề |
+| `GET` | `/learning-resources/ielts-writing/problems/{problemId}/bands` | Lấy các band bài mẫu |
+| `GET` | `/learning-resources/ielts-writing/problems/{problemId}/references?band=7.0` | Lấy bài mẫu theo band |
+| `POST` | `/learning-resources/ielts-writing/reviews` | Chấm bài viết bằng AI |
+| `GET` | `/learning-resources/ielts-writing/attempt-history?userId={userId}&exerciseId={problemId}` | Lấy lịch sử chấm bài |
+
+Request chấm IELTS Writing:
+
+```json
+{
+  "exerciseId": "ielts-writing-exercise-id",
+  "userId": "user-id",
+  "userAnswer": "Learner essay..."
+}
+```
+
+Response `result` là chuỗi JSON do AI trả về. Backend sẽ lưu chuỗi này vào trường `review` của attempt.
+
+## Cấu Hình Và Chạy Local
+
+Yêu cầu:
+
+- Java 21
+- MySQL với database `vocab_app`
+- Redis
+- Maven wrapper có sẵn trong repo
+
+Các biến môi trường chính:
+
+```text
+MYSQL_USERNAME
+MYSQL_PASSWORD
+REDIS_PASSWORD
+JWT_SIGNER_KEY
+SPRING_MAIL_USERNAME
+SPRING_MAIL_PASSWORD
+AZURE_TRANSLATOR_KEY_1
+AZURE_TRANSLATOR_ENDPOINT
+AZURE_TRANSLATOR_REGION
+GROK_API_KEY
+```
+
+`GROK_API_KEY` được dùng cho tính năng AI review IELTS Writing qua cấu hình `grok.api.key`. Nếu chưa cấu hình key này, API review sẽ trả lỗi cấu hình.
+
+Chạy test:
+
+```powershell
+.\mvnw.cmd test
+```
+
+Build jar:
+
+```powershell
+.\mvnw.cmd clean package
+```
+
+Chạy API:
+
+```powershell
+.\mvnw.cmd spring-boot:run
+```
+
+Sau khi chạy, Swagger UI nằm tại:
+
+```text
+http://localhost:8080/vocab-learning/swagger-ui.html
+```
+
+## Ghi Chú Bảo Mật
+
+- Không commit secret hoặc file cấu hình riêng tư.
+- Không log password, password hash, JWT, push token, bài viết dài của người dùng hoặc đáp án challenge nghe.
+- Frontend không nên hiển thị `solution` của listen challenge cho người học dù backend có thể trả về trong response.
+- Các endpoint không public cần gửi `Authorization: Bearer <token>`.
