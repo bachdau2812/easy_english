@@ -1,4 +1,4 @@
-# Vocab App
+﻿# Vocab App
 
 Vocab App là backend Spring Boot cho ứng dụng học tiếng Anh tập trung vào từ vựng, luyện nghe, ôn tập thông minh và luyện IELTS. Mục tiêu của app là giúp người học tra cứu kỹ hơn, lưu đúng nghĩa cần học, luyện lại bằng nhiều dạng bài và theo dõi tiến độ theo từng lần làm bài.
 
@@ -44,59 +44,6 @@ Vocab App là backend Spring Boot cho ứng dụng học tiếng Anh tập trung
 
 - Có API cho learning resources, IELTS Reading source và các placeholder cho luồng tạo quiz/tài nguyên tiếp theo.
 - Hỗ trợ gửi email và push notification qua notification template.
-
-## API Nhanh
-
-Base URL local:
-
-```text
-http://localhost:8080/vocab-learning
-```
-
-Tất cả response được bọc trong `ApiResponse<T>`:
-
-```json
-{
-  "code": 2000,
-  "message": "Success message",
-  "traceId": "trace-id",
-  "result": {}
-}
-```
-
-### IELTS Reading
-
-| Method | Endpoint | Mô tả |
-|---|---|---|
-| `GET` | `/learning-resources/ielts-reading-sources?page=0&limit=20` | Lấy danh sách bài đọc |
-| `GET` | `/learning-resources/ielts-reading-sources/categories` | Lấy danh sách category |
-| `GET` | `/learning-resources/ielts-reading-sources/by-category?name=Science&page=0&limit=20` | Lọc bài đọc theo category |
-| `GET` | `/learning-resources/ielts-reading-sources/{readingId}/quiz?userId={userId}` | Lấy quiz và các câu đã hoàn thành |
-| `POST` | `/learning-resources/ielts-reading-sources` | Thêm IELTS Reading source |
-
-### IELTS Writing
-
-| Method | Endpoint | Mô tả |
-|---|---|---|
-| `GET` | `/learning-resources/ielts-writing/topics?taskType=1` | Lấy topic theo task type |
-| `GET` | `/learning-resources/ielts-writing/problems?topic_name=Education&userId={userId}` | Lấy danh sách đề theo topic |
-| `GET` | `/learning-resources/ielts-writing/problems/{problemId}` | Lấy chi tiết đề |
-| `GET` | `/learning-resources/ielts-writing/problems/{problemId}/bands` | Lấy các band bài mẫu |
-| `GET` | `/learning-resources/ielts-writing/problems/{problemId}/references?band=7.0` | Lấy bài mẫu theo band |
-| `POST` | `/learning-resources/ielts-writing/reviews` | Chấm bài viết bằng AI |
-| `GET` | `/learning-resources/ielts-writing/attempt-history?userId={userId}&exerciseId={problemId}` | Lấy lịch sử chấm bài |
-
-Request chấm IELTS Writing:
-
-```json
-{
-  "exerciseId": "ielts-writing-exercise-id",
-  "userId": "user-id",
-  "userAnswer": "Learner essay..."
-}
-```
-
-Response `result` là chuỗi JSON do AI trả về. Backend sẽ lưu chuỗi này vào trường `review` của attempt.
 
 ## Cấu Hình Và Chạy Local
 
@@ -147,10 +94,3 @@ Sau khi chạy, Swagger UI nằm tại:
 ```text
 http://localhost:8080/vocab-learning/swagger-ui.html
 ```
-
-## Ghi Chú Bảo Mật
-
-- Không commit secret hoặc file cấu hình riêng tư.
-- Không log password, password hash, JWT, push token, bài viết dài của người dùng hoặc đáp án challenge nghe.
-- Frontend không nên hiển thị `solution` của listen challenge cho người học dù backend có thể trả về trong response.
-- Các endpoint không public cần gửi `Authorization: Bearer <token>`.
