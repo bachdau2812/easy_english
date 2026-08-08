@@ -63,4 +63,17 @@ public interface UserVocabularyRepository extends JpaRepository<UserVocabulary, 
             @Param("userId") String userId,
             @Param("now") LocalDateTime now
     );
+
+    @Query(value = """
+            SELECT uv
+            FROM UserVocabulary uv
+            WHERE uv.userId = :userId
+                AND uv.nextReviewAt <= :now
+            ORDER BY uv.level ASC, uv.nextReviewAt ASC
+            """)
+    List<UserVocabulary> findDueReviewVocabs(
+            @Param("userId") String userId,
+            @Param("now") LocalDateTime now,
+            Pageable pageable
+    );
 }

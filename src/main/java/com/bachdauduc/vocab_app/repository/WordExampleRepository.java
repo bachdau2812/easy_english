@@ -6,12 +6,15 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 
 public interface WordExampleRepository extends JpaRepository<WordExample, String> {
     List<WordExample> findByWordId(String wordId);
 
     List<WordExample> findByWordIdAndSenseId(String wordId, String senseId);
+
+    List<WordExample> findBySenseIdIn(Collection<String> senseIds);
 
     @Query(value = """
             SELECT

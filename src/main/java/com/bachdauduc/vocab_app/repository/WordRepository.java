@@ -12,15 +12,44 @@ import java.util.List;
 public interface WordRepository extends JpaRepository<Word, String> {
     List<Word> findByWord(String word);
 
-    List<Word> findByNormalizedWord(String normalizedWord);
+    @Query(value = """
+            SELECT w.*
+            FROM words w
+            JOIN (
+                SELECT MIN(w2.id) AS id
+                FROM words w2
+                WHERE w2.normalized_word = :normalizedWord
+                GROUP BY BINARY(w2.word), w2.pos, w2.word_source, w2.cert_level
+            ) representative ON representative.id = w.id
+            ORDER BY w.normalized_word ASC, w.word ASC, w.id ASC
+            """, nativeQuery = true)
+    List<Word> findByNormalizedWord(@Param("normalizedWord") String normalizedWord);
 
     @Query(value = """
-            SELECT *
-            FROM words
-            WHERE normalized_word LIKE CONCAT(:normalizedPrefix, '%')
-            ORDER BY normalized_word ASC, word ASC
+            SELECT w.*
+            FROM words w
+            JOIN (
+                SELECT MIN(w2.id) AS id
+                FROM words w2
+                WHERE w2.normalized_word LIKE CONCAT(:normalizedPrefix, '%')
+                GROUP BY BINARY(w2.word), w2.pos, w2.word_source, w2.cert_level
+            ) representative ON representative.id = w.id
+            ORDER BY w.normalized_word ASC, w.word ASC, w.id ASC
             """, nativeQuery = true)
     List<Word> findByNormalizedWordPrefix(@Param("normalizedPrefix") String normalizedPrefix);
+
+    @Query(value = """
+            SELECT w.word
+            FROM words w
+            JOIN (
+                SELECT MIN(w2.id) AS id
+                FROM words w2
+                WHERE w2.normalized_word LIKE CONCAT(:normalizedPrefix, '%')
+                GROUP BY BINARY(w2.word)
+            ) representative ON representative.id = w.id
+            ORDER BY w.word ASC, w.id ASC
+            """, nativeQuery = true)
+    List<String> findUniqueWordsByNormalizedWordPrefix(@Param("normalizedPrefix") String normalizedPrefix);
 
     @Query(
             value = """

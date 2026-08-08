@@ -65,9 +65,11 @@ public class SecurityConfig {
             "/word-data/word",
             "/word-data/words/search",
             "/word-data/words/basic-search",
+            "/word-data/word/basic-search",
             "/learning-resources/ielts-reading-sources",
             "/learning-resources/ielts-reading-sources/categories",
-            "/learning-resources/ielts-reading-sources/by-category"
+            "/learning-resources/ielts-reading-sources/by-category",
+            "/actuator/health"
     };
 
     @Value("${jwt.signerKey}")

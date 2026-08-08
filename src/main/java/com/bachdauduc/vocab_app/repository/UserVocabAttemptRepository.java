@@ -118,7 +118,8 @@ public interface UserVocabAttemptRepository extends JpaRepository<UserVocabAttem
                  FROM user_vocab_attempts a
                  WHERE a.user_id = :userId
                     AND a.created_at >= :fromTime
-                    AND a.created_at < :toTime) AS totalAttempts,
+                    AND a.created_at < :toTime
+                    AND (a.exercise_type LIKE 'QUIZ_%' OR a.exercise_type LIKE 'LAT_%')) AS totalAttempts,
                 (SELECT COALESCE(SUM(CASE WHEN (a.exercise_type LIKE 'QUIZ_%' OR a.exercise_type LIKE 'LAT_%') AND a.is_correct = TRUE THEN 1 ELSE 0 END), 0)
                  FROM user_vocab_attempts a
                  WHERE a.user_id = :userId
@@ -180,7 +181,7 @@ public interface UserVocabAttemptRepository extends JpaRepository<UserVocabAttem
 
     @Query(value = """
             SELECT
-                COUNT(*) AS totalAttempts,
+                COALESCE(SUM(CASE WHEN (a.exercise_type LIKE 'QUIZ_%' OR a.exercise_type LIKE 'LAT_%') THEN 1 ELSE 0 END), 0) AS totalAttempts,
                 COALESCE(SUM(CASE WHEN (a.exercise_type LIKE 'QUIZ_%' OR a.exercise_type LIKE 'LAT_%') AND a.is_correct = TRUE THEN 1 ELSE 0 END), 0) AS correctQuizAttempt,
                 COALESCE(SUM(CASE WHEN (a.exercise_type LIKE 'QUIZ_%' OR a.exercise_type LIKE 'LAT_%') AND a.is_correct = FALSE THEN 1 ELSE 0 END), 0) AS wrongQuizAttempt,
                 COUNT(DISTINCT CASE WHEN a.exercise_type LIKE 'VOCAB_%' AND a.user_vocab_id IS NOT NULL THEN a.user_vocab_id END) AS totalUniqueVocab,

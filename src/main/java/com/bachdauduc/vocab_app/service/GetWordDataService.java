@@ -1,5 +1,6 @@
 package com.bachdauduc.vocab_app.service;
 
+import com.bachdauduc.vocab_app.dto.response.worddata.BasicWordSearchResponse;
 import com.bachdauduc.vocab_app.dto.response.worddata.WordExampleResponse;
 import com.bachdauduc.vocab_app.dto.response.worddata.WordFormResponse;
 import com.bachdauduc.vocab_app.dto.response.worddata.WordIdiomResponse;
@@ -183,29 +184,51 @@ public class GetWordDataService {
         }
 
         String trimmedText = text.trim();
-        Map<String, Word> matchedWordsById = findMatchedWordsByText(trimmedText);
+        List<Word> matchedWords = findMatchedWordsByText(trimmedText);
 
-        List<WordResponse> responses = matchedWordsById.values().stream()
+        List<WordResponse> responses = matchedWords.stream()
                 .map(word -> getWordResponseWithCache(word.getId(), isTrans, transLangCode))
                 .toList();
         log.info("Words searched by text: text={}, isTrans={}, matchedCount={}, responseCount={}",
-                trimmedText, isTrans, matchedWordsById.size(), responses.size());
+                trimmedText, isTrans, matchedWords.size(), responses.size());
         return responses;
     }
 
-    public List<Word> searchWordObjectsByText(String text, boolean isAutocomplete) {
-        log.info("Start service: method=searchWordObjectsByText, text={}, isAutocomplete={}", text, isAutocomplete);
+    public List<BasicWordSearchResponse> searchWordObjectsByText(String text, boolean isAutocomplete) {
+        return searchWordObjectsByText(text, isAutocomplete, false);
+    }
+
+    public List<BasicWordSearchResponse> searchWordObjectsByText(
+            String text,
+            boolean isAutocomplete,
+            boolean isUniqueSearch
+    ) {
+        log.info("Start service: method=searchWordObjectsByText, text={}, isAutocomplete={}, isUniqueSearch={}",
+                text, isAutocomplete, isUniqueSearch);
         if (!StringUtils.hasText(text)) {
             return List.of();
         }
 
-        String normalizedText = text.trim().toLowerCase();
+        String normalizedText = normalizeSearchText(text);
+        if (isUniqueSearch) {
+            List<BasicWordSearchResponse> uniqueWords = wordRepository.findUniqueWordsByNormalizedWordPrefix(normalizedText)
+                    .stream()
+                    .map(this::toUniqueBasicWordSearchResponse)
+                    .toList();
+            log.info("Unique word objects searched by prefix: text={}, resultCount={}",
+                    normalizedText, uniqueWords.size());
+            return uniqueWords;
+        }
+
         List<Word> words = isAutocomplete
-                ? wordRepository.findByNormalizedWordPrefix(normalizedText)
-                : List.copyOf(findMatchedWordsByText(normalizedText).values());
+                ? distinctWordsBySearchTuple(wordRepository.findByNormalizedWordPrefix(normalizedText))
+                : findMatchedWordsByText(normalizedText);
+        List<BasicWordSearchResponse> responses = words.stream()
+                .map(this::toBasicWordSearchResponse)
+                .toList();
         log.info("Word objects searched by text: text={}, isAutocomplete={}, resultCount={}",
-                normalizedText, isAutocomplete, words.size());
-        return words;
+                normalizedText, isAutocomplete, responses.size());
+        return responses;
     }
 
     public Page<Word> getWordsByCategory(String categoryId, int page, int limit) {
@@ -304,6 +327,28 @@ public class GetWordDataService {
         return categories;
     }
 
+    private BasicWordSearchResponse toBasicWordSearchResponse(Word word) {
+        return BasicWordSearchResponse.builder()
+                .id(word.getId())
+                .word(word.getWord())
+                .normalizedWord(word.getNormalizedWord())
+                .pos(word.getPos())
+                .lang(word.getLang())
+                .langCode(word.getLangCode())
+                .wordSource(word.getWordSource())
+                .otherSource(word.getOtherSource())
+                .certLevel(word.getCertLevel())
+                .createdAt(word.getCreatedAt())
+                .updatedAt(word.getUpdatedAt())
+                .build();
+    }
+
+    private BasicWordSearchResponse toUniqueBasicWordSearchResponse(String word) {
+        return BasicWordSearchResponse.builder()
+                .word(word)
+                .build();
+    }
+
     private WordResponse getWordResponseWithCache(String wordId, boolean isTrans, String transLangCode) {
         String cacheKey = wordCacheKey(wordId, isTrans);
         log.info("Word cache lookup: wordId={}, isTrans={}, transLangCode={}, key={}",
@@ -333,11 +378,28 @@ public class GetWordDataService {
                 : redisKeyProperties.wordWithoutTransKey(wordId);
     }
 
-    private Map<String, Word> findMatchedWordsByText(String text) {
-        Map<String, Word> matchedWordsById = new LinkedHashMap<>();
-        wordRepository.findByNormalizedWord(normalizeSearchText(text))
-                .forEach(word -> matchedWordsById.putIfAbsent(word.getId(), word));
-        return matchedWordsById;
+    private List<Word> findMatchedWordsByText(String text) {
+        return distinctWordsBySearchTuple(wordRepository.findByNormalizedWord(normalizeSearchText(text)));
+    }
+
+    private List<Word> distinctWordsBySearchTuple(List<Word> words) {
+        return words.stream()
+                .collect(Collectors.toMap(
+                        this::toSearchTuple,
+                        Function.identity(),
+                        (first, duplicate) -> first,
+                        LinkedHashMap::new
+                ))
+                .values()
+                .stream()
+                .toList();
+    }
+
+    private SearchTuple toSearchTuple(Word word) {
+        return new SearchTuple(word.getWord(), word.getPos(), word.getWordSource(), word.getCertLevel());
+    }
+
+    private record SearchTuple(String word, String pos, String source, String level) {
     }
 
     private String normalizeSearchText(String text) {

@@ -10,6 +10,7 @@ public enum ExerciseType {
     VOCAB_SENTENCE_TO_MEANING,
     VOCAB_SENTENCE_BLANK_TO_SOUND,
     LAT_LISTEN_AND_TYPE,
+    QUIZ_IELTS_READING,
     IELTS_WRITING_REVIEW;
 
     public boolean isVocab() {

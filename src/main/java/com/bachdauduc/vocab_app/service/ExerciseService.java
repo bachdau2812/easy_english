@@ -23,7 +23,6 @@ import com.bachdauduc.vocab_app.entity.WordSenseLocalization;
 import com.bachdauduc.vocab_app.entity.WordSound;
 import com.bachdauduc.vocab_app.exception.AppException;
 import com.bachdauduc.vocab_app.exception.ErrorCode;
-import com.bachdauduc.vocab_app.properties.RedisKeyProperties;
 import com.bachdauduc.vocab_app.repository.ListenAndTypeExerciseChallengeRepository;
 import com.bachdauduc.vocab_app.repository.ListenAndTypeSubCategoryRepository;
 import com.bachdauduc.vocab_app.repository.ListenExerciseRepository;
@@ -38,12 +37,19 @@ import com.bachdauduc.vocab_app.repository.WordSenseLocalizationRepository;
 import com.bachdauduc.vocab_app.repository.WordSenseRepository;
 import com.bachdauduc.vocab_app.repository.WordSoundRepository;
 import com.bachdauduc.vocab_app.repository.projection.WordExampleProjection;
+import com.bachdauduc.vocab_app.service.review.BalancedReviewQuizScheduler;
+import com.bachdauduc.vocab_app.service.review.ReviewProgressStore;
+import com.bachdauduc.vocab_app.service.review.ReviewQuizFactory;
+import com.bachdauduc.vocab_app.service.review.ReviewRequestContext;
+import com.bachdauduc.vocab_app.service.review.ReviewTargetEligibility;
+import com.bachdauduc.vocab_app.service.review.ReviewVocabDataLoader;
+import com.bachdauduc.vocab_app.service.review.ReviewVocabSnapshot;
 import com.bachdauduc.vocab_app.utils.RedisUtil;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -77,16 +83,6 @@ public class ExerciseService {
             Pattern.CASE_INSENSITIVE
     );
     private static final Pattern NATURAL_SORT_TOKEN_PATTERN = Pattern.compile("\\d+|\\D+");
-    private static final List<ExerciseType> VOCAB_EXERCISE_TYPES = List.of(
-            ExerciseType.VOCAB_WORD_TO_MEANING,
-            ExerciseType.VOCAB_FILL_MISSING_WORD_PART,
-            ExerciseType.VOCAB_LISTEN_AND_TYPE_WORD,
-            ExerciseType.VOCAB_CHOOSE_WORD_IN_SENTENCE_BLANK,
-            ExerciseType.VOCAB_FILL_WORD_IN_SENTENCE_BLANK,
-            ExerciseType.VOCAB_MEANING_TO_SOUND,
-            ExerciseType.VOCAB_SENTENCE_TO_MEANING,
-            ExerciseType.VOCAB_SENTENCE_BLANK_TO_SOUND
-    );
 
     UserVocabularyRepository userVocabularyRepository;
     UserLessonRepository userLessonRepository;
@@ -101,8 +97,11 @@ public class ExerciseService {
     WordSenseLocalizationRepository wordSenseLocalizationRepository;
     WordSoundRepository wordSoundRepository;
     WordExampleRepository wordExampleRepository;
-    RedisTemplate<String, String> redisTemplate;
-    RedisKeyProperties redisKeyProperties;
+    WordExampleGenerationService wordExampleGenerationService;
+    ReviewVocabDataLoader reviewVocabDataLoader;
+    BalancedReviewQuizScheduler balancedReviewQuizScheduler;
+    ReviewQuizFactory reviewQuizFactory;
+    ReviewProgressStore reviewProgressStore;
 
     public UserLessonResponse addUserLesson(UserLessonRequest request) {
         log.debug("Start service: method=addUserLesson, userId={}, lessonId={}, lessonType={}",
@@ -225,15 +224,9 @@ public class ExerciseService {
         assertUserExists(userId);
 
         List<UserVocabulary> selectedVocabs = selectReviewVocabs(userId, totalReviewVocab);
-        List<String> selectedIds = selectedVocabs.stream()
-                .map(UserVocabulary::getId)
-                .toList();
-
-        List<VocabReviewQuizResponse> quizzes = new ArrayList<>();
-        for (UserVocabulary userVocabulary : selectedVocabs) {
-            generateNextReviewQuiz(userId, userVocabulary.getId(), selectedIds, langCode)
-                    .ifPresent(quizzes::add);
-        }
+        wordExampleGenerationService.ensureExamples(selectedVocabs);
+        List<VocabReviewQuizResponse> quizzes =
+                generateReviewQuizzes(userId, selectedVocabs, langCode);
 
         log.info("Review vocab quizzes generated: userId={}, requested={}, resultCount={}",
                 userId, totalReviewVocab, quizzes.size());
@@ -249,12 +242,132 @@ public class ExerciseService {
             throw new AppException(ErrorCode.USER_VOCABULARY_NOT_FOUND);
         }
 
-        List<String> reviewUserVocabIds = reviewContextIdsForSingleVocab(userId, userVocabId);
-        Optional<VocabReviewQuizResponse> quiz =
-                generateNextReviewQuiz(userId, userVocabId, reviewUserVocabIds, langCode);
+        wordExampleGenerationService.ensureExamples(List.of(userVocabulary));
+        List<UserVocabulary> contextVocabularies = new ArrayList<>(userVocabularyRepository
+                .findDueReviewVocabs(userId, LocalDateTime.now(), PageRequest.of(0, 32)));
+        if (contextVocabularies.stream().noneMatch(vocabulary -> userVocabId.equals(vocabulary.getId()))) {
+            contextVocabularies.add(userVocabulary);
+        }
+        Optional<VocabReviewQuizResponse> quiz = generateReviewQuizzes(
+                userId,
+                contextVocabularies,
+                langCode,
+                Set.of(userVocabId)
+        ).stream().findFirst();
         log.info("Single review vocab quiz generated: userId={}, userVocabId={}, resultCount={}",
                 userId, userVocabId, quiz.isPresent() ? 1 : 0);
         return quiz.map(List::of).orElseGet(List::of);
+    }
+
+    private List<VocabReviewQuizResponse> generateReviewQuizzes(
+            String userId,
+            List<UserVocabulary> contextVocabularies,
+            String langCode
+    ) {
+        Set<String> targetIds = contextVocabularies.stream()
+                .map(UserVocabulary::getId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        return generateReviewQuizzes(userId, contextVocabularies, langCode, targetIds);
+    }
+
+    private List<VocabReviewQuizResponse> generateReviewQuizzes(
+            String userId,
+            List<UserVocabulary> contextVocabularies,
+            String langCode,
+            Set<String> targetIds
+    ) {
+        if (contextVocabularies.isEmpty() || targetIds.isEmpty()) {
+            return List.of();
+        }
+        Map<String, ReviewVocabSnapshot> snapshots =
+                reviewVocabDataLoader.load(contextVocabularies, langCode);
+        ReviewRequestContext context = ReviewRequestContext.create(contextVocabularies, snapshots);
+        List<ReviewTargetEligibility> targets = contextVocabularies.stream()
+                .filter(vocabulary -> targetIds.contains(vocabulary.getId()))
+                .filter(vocabulary -> snapshots.containsKey(vocabulary.getId()))
+                .map(vocabulary -> new ReviewTargetEligibility(
+                        vocabulary.getId(),
+                        reviewQuizFactory.eligibleTypes(
+                                vocabulary,
+                                snapshots.get(vocabulary.getId()),
+                                context
+                        )
+                ))
+                .toList();
+        Map<String, ExerciseType> assignments = balancedReviewQuizScheduler.schedule(targets);
+        Map<String, Set<ExerciseType>> eligibleById = targets.stream()
+                .collect(Collectors.toMap(
+                        ReviewTargetEligibility::userVocabId,
+                        ReviewTargetEligibility::eligibleTypes
+                ));
+
+        List<VocabReviewQuizResponse> quizzes = new ArrayList<>();
+        Map<ExerciseType, Integer> emittedCounts = new java.util.EnumMap<>(ExerciseType.class);
+        for (UserVocabulary vocabulary : contextVocabularies) {
+            if (!targetIds.contains(vocabulary.getId())) {
+                continue;
+            }
+            ReviewVocabSnapshot snapshot = snapshots.get(vocabulary.getId());
+            ExerciseType assigned = assignments.get(vocabulary.getId());
+            if (snapshot == null || assigned == null) {
+                continue;
+            }
+            List<ExerciseType> candidates = orderedCandidates(
+                    assigned,
+                    eligibleById.getOrDefault(vocabulary.getId(), Set.of()),
+                    emittedCounts
+            );
+            Optional<ExerciseType> reservedType =
+                    reviewProgressStore.reserveFirstAvailable(userId, snapshot.wordId(), candidates);
+            if (reservedType.isEmpty()) {
+                continue;
+            }
+            createReservedQuiz(
+                    userId, vocabulary, snapshot, context, reservedType.get()
+            ).ifPresent(quiz -> {
+                quizzes.add(quiz);
+                emittedCounts.merge(reservedType.get(), 1, Integer::sum);
+            });
+        }
+        return List.copyOf(quizzes);
+    }
+
+    private List<ExerciseType> orderedCandidates(
+            ExerciseType assigned,
+            Set<ExerciseType> eligibleTypes,
+            Map<ExerciseType, Integer> emittedCounts
+    ) {
+        List<ExerciseType> candidates = new ArrayList<>();
+        candidates.add(assigned);
+        eligibleTypes.stream()
+                .filter(type -> !type.equals(assigned))
+                .sorted(Comparator
+                        .comparingInt((ExerciseType type) -> emittedCounts.getOrDefault(type, 0))
+                        .thenComparing(Enum::name))
+                .forEach(candidates::add);
+        return candidates;
+    }
+
+    private Optional<VocabReviewQuizResponse> createReservedQuiz(
+            String userId,
+            UserVocabulary vocabulary,
+            ReviewVocabSnapshot snapshot,
+            ReviewRequestContext context,
+            ExerciseType type
+    ) {
+        try {
+            return Optional.of(reviewQuizFactory.create(vocabulary, snapshot, context, type));
+        } catch (AppException exception) {
+            reviewProgressStore.release(userId, snapshot.wordId(), type);
+            log.warn(
+                    "Review quiz creation skipped: userVocabId={}, wordId={}, type={}, errorCode={}",
+                    vocabulary.getId(),
+                    snapshot.wordId(),
+                    type,
+                    exception.getErrorCode()
+            );
+            return Optional.empty();
+        }
     }
 
     public VocabReviewQuizResponse generateWordToMeaningQuiz(
@@ -449,136 +562,6 @@ public class ExerciseService {
                 .build();
     }
 
-    private Optional<VocabReviewQuizResponse> generateNextReviewQuiz(
-            String userId,
-            String userVocabId,
-            List<String> reviewUserVocabIds,
-            String langCode
-    ) {
-        VocabContext context = buildVocabContext(getRequiredUserVocabulary(userVocabId), langCode);
-        while (true) {
-            Optional<ExerciseType> exerciseType = randomAvailableExerciseType(userId, context);
-            if (exerciseType.isEmpty()) {
-                log.info("No review quiz generated: userId={}, userVocabId={}, wordId={}, reason=all_exercise_types_reviewed",
-                        userId, userVocabId, context.word().getId());
-                return Optional.empty();
-            }
-
-            try {
-                log.debug("Generate review quiz: userId={}, userVocabId={}, wordId={}, exerciseType={}",
-                        userId, userVocabId, context.word().getId(), exerciseType.get());
-                VocabReviewQuizResponse quiz = generateQuiz(exerciseType.get(), userVocabId, reviewUserVocabIds, langCode);
-                markCurrentReview(userId, context.word().getId(), exerciseType.get());
-                return Optional.of(quiz);
-            } catch (AppException exception) {
-                if (isSoundExerciseType(exerciseType.get())
-                        && ErrorCode.WORD_SOUND_NOT_FOUND.equals(exception.getErrorCode())) {
-                    markCurrentReview(userId, context.word().getId(), exerciseType.get());
-                    log.warn("Sound-based quiz skipped and marked reviewed: userId={}, userVocabId={}, wordId={}, exerciseType={}, reason=no_sound",
-                            userId, userVocabId, context.word().getId(), exerciseType.get());
-                    continue;
-                }
-                if (isMeaningChoiceExerciseType(exerciseType.get())
-                        && ErrorCode.INVALID_EXERCISE_TYPE.equals(exception.getErrorCode())) {
-                    markCurrentReview(userId, context.word().getId(), exerciseType.get());
-                    log.warn("Meaning-choice quiz skipped and marked reviewed: userId={}, userVocabId={}, wordId={}, exerciseType={}, reason=not_enough_meaning_options",
-                            userId, userVocabId, context.word().getId(), exerciseType.get());
-                    continue;
-                }
-                throw exception;
-            }
-        }
-    }
-
-    private VocabReviewQuizResponse generateQuiz(
-            ExerciseType exerciseType,
-            String userVocabId,
-            List<String> reviewUserVocabIds,
-            String langCode
-    ) {
-        UserVocabulary userVocabulary = getRequiredUserVocabulary(userVocabId);
-        String senseCacheKey = reviewQuizSenseCacheKey(userVocabulary);
-        String cacheKey = redisKeyProperties.reviewQuizKey(senseCacheKey, exerciseType.name());
-        VocabReviewQuizResponse cachedQuiz = getCachedReviewQuiz(cacheKey, userVocabulary);
-        if (cachedQuiz != null) {
-            log.info("Review quiz cache hit: key={}, userVocabId={}, wordId={}, senseCacheKey={}, exerciseType={}",
-                    cacheKey, userVocabId, userVocabulary.getWordId(), senseCacheKey, exerciseType);
-            return cachedQuiz;
-        }
-
-        log.debug("Review quiz cache miss: key={}, userVocabId={}, wordId={}, senseCacheKey={}, exerciseType={}",
-                cacheKey, userVocabId, userVocabulary.getWordId(), senseCacheKey, exerciseType);
-        VocabReviewQuizResponse quiz = switch (exerciseType) {
-            case VOCAB_WORD_TO_MEANING -> generateWordToMeaningQuiz(userVocabId, reviewUserVocabIds, langCode);
-            case VOCAB_FILL_MISSING_WORD_PART -> generateFillMissingWordPartQuiz(userVocabId, reviewUserVocabIds, langCode);
-            case VOCAB_LISTEN_AND_TYPE_WORD -> generateListenAndTypeWordQuiz(userVocabId, reviewUserVocabIds, langCode);
-            case VOCAB_CHOOSE_WORD_IN_SENTENCE_BLANK -> generateChooseWordInSentenceBlankQuiz(userVocabId, reviewUserVocabIds, langCode);
-            case VOCAB_FILL_WORD_IN_SENTENCE_BLANK -> generateFillWordInSentenceBlankQuiz(userVocabId, reviewUserVocabIds, langCode);
-            case VOCAB_MEANING_TO_SOUND -> generateMeaningToSoundQuiz(userVocabId, reviewUserVocabIds, langCode);
-            case VOCAB_SENTENCE_TO_MEANING -> generateSentenceToMeaningQuiz(userVocabId, reviewUserVocabIds, langCode);
-            case VOCAB_SENTENCE_BLANK_TO_SOUND -> generateSentenceBlankToSoundQuiz(userVocabId, reviewUserVocabIds, langCode);
-            default -> throw new AppException(ErrorCode.INVALID_EXERCISE_TYPE);
-        };
-        cacheReviewQuiz(cacheKey, quiz);
-        return quiz;
-    }
-
-    private VocabReviewQuizResponse getCachedReviewQuiz(String cacheKey, UserVocabulary userVocabulary) {
-        String cachedValue = redisTemplate.opsForValue().get(cacheKey);
-        VocabReviewQuizResponse cachedQuiz = RedisUtil.deserialize(cachedValue, VocabReviewQuizResponse.class);
-        if (cachedQuiz == null) {
-            return null;
-        }
-        if (matchesUserVocabSense(cachedQuiz, userVocabulary)) {
-            return cachedQuiz;
-        }
-
-        log.debug("Review quiz cache ignored: key={}, userVocabId={}, wordId={}, senseId={}, senseLocalizedId={}, reason=sense_differs",
-                cacheKey,
-                userVocabulary.getId(),
-                userVocabulary.getWordId(),
-                userVocabulary.getSenseId(),
-                userVocabulary.getSenseLocalizedId());
-        return null;
-    }
-
-    private String reviewQuizSenseCacheKey(UserVocabulary userVocabulary) {
-        if (StringUtils.hasText(userVocabulary.getSenseLocalizedId())) {
-            return "sense_localized:" + userVocabulary.getSenseLocalizedId();
-        }
-        if (StringUtils.hasText(userVocabulary.getSenseId())) {
-            return "sense:" + userVocabulary.getSenseId();
-        }
-
-        log.warn("Review quiz cache skipped: userVocabId={}, wordId={}, reason=missing_sense",
-                userVocabulary.getId(), userVocabulary.getWordId());
-        throw new AppException(ErrorCode.USER_VOCABULARY_NOT_FOUND);
-    }
-
-    private boolean matchesUserVocabSense(VocabReviewQuizResponse cachedQuiz, UserVocabulary userVocabulary) {
-        WordSenseResponse cachedSense = cachedQuiz.getWordSense() != null
-                ? cachedQuiz.getWordSense()
-                : cachedQuiz.getSense();
-        if (cachedSense == null) {
-            return false;
-        }
-        if (StringUtils.hasText(userVocabulary.getSenseLocalizedId())) {
-            return userVocabulary.getSenseLocalizedId().equals(cachedSense.getLocalizationId());
-        }
-        return StringUtils.hasText(userVocabulary.getSenseId())
-                && userVocabulary.getSenseId().equals(cachedSense.getSenseId());
-    }
-
-    private void cacheReviewQuiz(String cacheKey, VocabReviewQuizResponse quiz) {
-        String serializedQuiz = RedisUtil.serialize(quiz);
-        if (!StringUtils.hasText(serializedQuiz)) {
-            log.warn("Review quiz cache skipped: key={}, reason=serialize_failed", cacheKey);
-            return;
-        }
-        redisTemplate.opsForValue().set(cacheKey, serializedQuiz, redisKeyProperties.reviewQuizTtl());
-        log.debug("Review quiz cached: key={}, ttlSeconds={}", cacheKey, redisKeyProperties.reviewQuizTtl().toSeconds());
-    }
-
     private List<UserVocabulary> selectReviewVocabs(String userId, int totalReviewVocab) {
         Map<Integer, Integer> quotas = reviewQuotas(totalReviewVocab);
         List<UserVocabulary> dueVocabs = userVocabularyRepository.findDueReviewVocabs(userId, LocalDateTime.now());
@@ -650,54 +633,6 @@ public class ExerciseService {
             case 90 -> Map.of(1, 25, 2, 25, 3, 14, 4, 13, 5, 10, 6, 8);
             default -> throw new AppException(ErrorCode.INVALID_REVIEW_VOCAB_TOTAL);
         };
-    }
-
-    private Optional<ExerciseType> randomAvailableExerciseType(String userId, VocabContext context) {
-        List<ExerciseType> availableTypes = VOCAB_EXERCISE_TYPES.stream()
-                .filter(type -> !requiresMissingCharacterQuiz(type)
-                        || normalizedLetterCount(context.word().getWord()) > 2)
-                .filter(type -> !Boolean.TRUE.equals(redisTemplate.hasKey(currentReviewKey(
-                        userId,
-                        context.word().getId(),
-                        type
-                ))))
-                .collect(Collectors.toCollection(ArrayList::new));
-
-        if (availableTypes.isEmpty()) {
-            log.info("No available vocab exercise type: userId={}, wordId={}, userVocabId={}",
-                    userId, context.word().getId(), context.userVocabulary().getId());
-            return Optional.empty();
-        }
-
-        ExerciseType selectedType = availableTypes.get(ThreadLocalRandom.current().nextInt(availableTypes.size()));
-        log.debug("Available vocab exercise types resolved: userId={}, wordId={}, availableTypes={}, selectedType={}",
-                userId, context.word().getId(), availableTypes, selectedType);
-        return Optional.of(selectedType);
-    }
-
-    private boolean requiresMissingCharacterQuiz(ExerciseType exerciseType) {
-        return ExerciseType.VOCAB_FILL_MISSING_WORD_PART.equals(exerciseType)
-                || ExerciseType.VOCAB_FILL_WORD_IN_SENTENCE_BLANK.equals(exerciseType);
-    }
-
-    private boolean isSoundExerciseType(ExerciseType exerciseType) {
-        return ExerciseType.VOCAB_LISTEN_AND_TYPE_WORD.equals(exerciseType)
-                || ExerciseType.VOCAB_MEANING_TO_SOUND.equals(exerciseType)
-                || ExerciseType.VOCAB_SENTENCE_BLANK_TO_SOUND.equals(exerciseType);
-    }
-
-    private boolean isMeaningChoiceExerciseType(ExerciseType exerciseType) {
-        return ExerciseType.VOCAB_SENTENCE_TO_MEANING.equals(exerciseType);
-    }
-
-    private void markCurrentReview(String userId, String wordId, ExerciseType exerciseType) {
-        String key = currentReviewKey(userId, wordId, exerciseType);
-        redisTemplate.opsForValue().set(key, "1", redisKeyProperties.currentReviewTtl());
-        log.debug("Current review redis marker saved: key={}, ttlSeconds={}", key, redisKeyProperties.currentReviewTtl().toSeconds());
-    }
-
-    private String currentReviewKey(String userId, String wordId, ExerciseType exerciseType) {
-        return redisKeyProperties.currentReviewKey(userId, wordId, exerciseType.name());
     }
 
     private List<VocabContext> buildVocabContexts(List<String> userVocabIds, String langCode) {

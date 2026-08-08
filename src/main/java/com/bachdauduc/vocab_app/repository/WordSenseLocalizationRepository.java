@@ -4,9 +4,12 @@ import com.bachdauduc.vocab_app.entity.WordSenseLocalization;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
+import java.util.Collection;
 import java.util.Optional;
 
 public interface WordSenseLocalizationRepository extends JpaRepository<WordSenseLocalization, String> {
+    List<WordSenseLocalization> findBySenseIdInAndLangCode(Collection<String> senseIds, String langCode);
+
     List<WordSenseLocalization> findByWordIdAndLangCode(String wordId, String langCode);
 
     List<WordSenseLocalization> findByWordIdAndSource(String wordId, String source);

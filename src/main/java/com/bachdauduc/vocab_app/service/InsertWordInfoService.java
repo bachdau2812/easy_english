@@ -33,6 +33,7 @@ import com.bachdauduc.vocab_app.repository.WordSenseLocalizationRepository;
 import com.bachdauduc.vocab_app.repository.WordSenseRepository;
 import com.bachdauduc.vocab_app.repository.WordSoundRepository;
 import com.bachdauduc.vocab_app.utils.RedisUtil;
+import com.bachdauduc.vocab_app.service.review.ReviewVocabCacheRevisionService;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -61,6 +62,7 @@ public class InsertWordInfoService {
     WordIdiomRepository wordIdiomRepository;
     WordIdiomTranslationRepository wordIdiomTranslationRepository;
     WordSoundRepository wordSoundRepository;
+    ReviewVocabCacheRevisionService reviewVocabCacheRevisionService;
 
     @Transactional
     public String insertWordCategories(InsertWordCategoriesRequest request) {
@@ -105,6 +107,7 @@ public class InsertWordInfoService {
         wordSense.setFormOf(toJson(request.getFormOf()));
         wordSense.setAltOf(toJson(request.getAltOf()));
         wordSenseRepository.save(wordSense);
+        reviewVocabCacheRevisionService.invalidateAfterCommit(List.of(request.getWordId()));
 
         log.info("Word sense inserted: wordId={}, senseId={}", request.getWordId(), wordSense.getId());
         return SUCCESS_MESSAGE;
@@ -126,6 +129,7 @@ public class InsertWordInfoService {
         localization.setSource(request.getSource());
         localization.setReviewStatus(defaultReviewStatus(request.getReviewStatus()));
         wordSenseLocalizationRepository.save(localization);
+        reviewVocabCacheRevisionService.invalidateAfterCommit(List.of(request.getWordId()));
 
         log.info("Word sense localization inserted: wordId={}, localizationId={}",
                 request.getWordId(), localization.getId());
@@ -166,6 +170,7 @@ public class InsertWordInfoService {
         example.setExampleType(request.getExampleType());
         example.setSourceRef(request.getSourceRef());
         wordExampleRepository.save(example);
+        reviewVocabCacheRevisionService.invalidateAfterCommit(List.of(request.getWordId()));
 
         log.info("Word example inserted: wordId={}, exampleId={}", request.getWordId(), example.getId());
         return SUCCESS_MESSAGE;
@@ -187,6 +192,7 @@ public class InsertWordInfoService {
         localization.setTranslatedText(request.getTranslatedText());
         localization.setReviewStatus(defaultReviewStatus(request.getReviewStatus()));
         wordExampleLocalizationRepository.save(localization);
+        reviewVocabCacheRevisionService.invalidateAfterCommit(List.of(request.getWordId()));
 
         log.info("Word example localization inserted: wordId={}, exampleId={}, localizationId={}",
                 request.getWordId(), request.getExampleId(), localization.getId());
@@ -254,6 +260,7 @@ public class InsertWordInfoService {
         sound.setMp3Url(request.getMp3Url());
         sound.setEnpr(request.getEnpr());
         wordSoundRepository.save(sound);
+        reviewVocabCacheRevisionService.invalidateAfterCommit(List.of(request.getWordId()));
 
         log.info("Word sound inserted: wordId={}, soundId={}", request.getWordId(), sound.getId());
         return SUCCESS_MESSAGE;

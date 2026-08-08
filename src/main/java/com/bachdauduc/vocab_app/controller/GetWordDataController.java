@@ -1,6 +1,7 @@
 package com.bachdauduc.vocab_app.controller;
 
 import com.bachdauduc.vocab_app.dto.response.ApiResponse;
+import com.bachdauduc.vocab_app.dto.response.worddata.BasicWordSearchResponse;
 import com.bachdauduc.vocab_app.dto.response.worddata.WordExampleResponse;
 import com.bachdauduc.vocab_app.dto.response.worddata.WordFormResponse;
 import com.bachdauduc.vocab_app.dto.response.worddata.WordIdiomResponse;
@@ -94,13 +95,15 @@ public class GetWordDataController {
         return success(getWordDataService.searchWordsByText(text, isTrans, transLangCode));
     }
 
-    @GetMapping("/words/basic-search")
-    public ApiResponse<List<Word>> searchWordObjectsByText(
+    @GetMapping({"/words/basic-search", "/word/basic-search"})
+    public ApiResponse<List<BasicWordSearchResponse>> searchWordObjectsByText(
             @RequestParam String text,
-            @RequestParam(defaultValue = "false") boolean isAutocomplete
+            @RequestParam(defaultValue = "false") boolean isAutocomplete,
+            @RequestParam(defaultValue = "false") boolean isUniqueSearch
     ) {
-        log.info("Request received: action=searchWordObjectsByText, text={}, isAutocomplete={}", text, isAutocomplete);
-        return success(getWordDataService.searchWordObjectsByText(text, isAutocomplete));
+        log.info("Request received: action=searchWordObjectsByText, text={}, isAutocomplete={}, isUniqueSearch={}",
+                text, isAutocomplete, isUniqueSearch);
+        return success(getWordDataService.searchWordObjectsByText(text, isAutocomplete, isUniqueSearch));
     }
 
     @GetMapping("/words/basic-search/by-category")

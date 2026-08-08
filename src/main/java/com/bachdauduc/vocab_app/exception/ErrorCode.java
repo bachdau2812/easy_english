@@ -34,6 +34,7 @@ public enum ErrorCode {
     INVALID_WRITING_REVIEW_REQUEST(2026, "Invalid writing review request", HttpStatus.BAD_REQUEST),
     WRITING_REVIEW_FAILED(2027, "Writing review failed", HttpStatus.BAD_REQUEST),
     GROQ_API_KEY_NOT_CONFIGURED(2028, "Groq API key is not configured", HttpStatus.BAD_REQUEST),
+    WORD_EXAMPLE_GENERATION_FAILED(2029, "Word example generation failed", HttpStatus.BAD_REQUEST),
     NOTIFICATION_TEMPLATE_NOT_FOUND(3001, "Notification template not found", HttpStatus.NOT_FOUND),
     UNSUPPORTED_NOTIFICATION_METHOD(3002, "Unsupported notification method", HttpStatus.BAD_REQUEST),
     PUSH_TOKEN_NOT_FOUND(3003, "Push token not found", HttpStatus.NOT_FOUND),

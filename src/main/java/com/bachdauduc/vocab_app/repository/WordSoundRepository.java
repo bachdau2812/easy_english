@@ -7,8 +7,11 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Collection;
 
 public interface WordSoundRepository extends JpaRepository<WordSound, String> {
+    List<WordSound> findByWordIdIn(Collection<String> wordIds);
+
     List<WordSound> findByWordId(String wordId);
 
     List<WordSound> findByWordIdAndSoundSource(String wordId, String soundSource);
