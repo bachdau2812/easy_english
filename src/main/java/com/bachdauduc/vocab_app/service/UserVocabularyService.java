@@ -1,6 +1,7 @@
 package com.bachdauduc.vocab_app.service;
 
 import com.bachdauduc.vocab_app.constant.ExerciseType;
+import com.bachdauduc.vocab_app.constant.UserVocabularyInfoType;
 import com.bachdauduc.vocab_app.dto.request.uservocabulary.SubmitReviewAttemptRequest;
 import com.bachdauduc.vocab_app.dto.request.uservocabulary.UserSearchHistoryRequest;
 import com.bachdauduc.vocab_app.dto.request.uservocabulary.UserVocabularyRequest;
@@ -8,6 +9,8 @@ import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserSearchHistoryRes
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabAttemptResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyStatisticResponse;
+import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyInfoResponse;
+import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyLevelQuantityResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.WrongVocabResponse;
 import com.bachdauduc.vocab_app.dto.response.worddata.WordResponse;
 import com.bachdauduc.vocab_app.dto.response.worddata.WordSenseResponse;
@@ -30,6 +33,7 @@ import com.bachdauduc.vocab_app.repository.projection.UserSearchHistoryProjectio
 import com.bachdauduc.vocab_app.repository.projection.UserVocabAttemptProjection;
 import com.bachdauduc.vocab_app.repository.projection.UserVocabStatisticProjection;
 import com.bachdauduc.vocab_app.repository.projection.UserVocabularyProjection;
+import com.bachdauduc.vocab_app.repository.projection.UserVocabularyLevelQuantityProjection;
 import com.bachdauduc.vocab_app.repository.projection.WrongVocabProjection;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -45,7 +49,11 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 @Slf4j
 @Service
@@ -201,6 +209,71 @@ public class UserVocabularyService {
         log.info("User vocabularies by level loaded: userId={}, level={}, resultCount={}, totalElements={}",
                 userId, level, response.getNumberOfElements(), response.getTotalElements());
         return response;
+    }
+
+    @Transactional(readOnly = true)
+    public UserVocabularyInfoResponse getUserVocabularyInfo(String userId, String infoType) {
+        log.debug("Start service: method=getUserVocabularyInfo, userId={}, infoType={}", userId, infoType);
+        assertUserExists(userId);
+        UserVocabularyInfoType resolvedInfoType = parseInfoType(infoType);
+
+        UserVocabularyInfoResponse response = switch (resolvedInfoType) {
+            case VOCAB_QUANTITY -> buildVocabularyQuantityInfo(userId);
+            case VOCAB_REVIEW -> UserVocabularyInfoResponse.builder()
+                    .userId(userId)
+                    .infoType(resolvedInfoType)
+                    .reviewQuantity(userVocabularyRepository.countDueReviewVocabs(
+                            userId,
+                            LocalDateTime.now()
+                    ))
+                    .build();
+        };
+        log.info(
+                "User vocabulary info loaded: userId={}, infoType={}, totalQuantity={}, reviewQuantity={}",
+                userId,
+                resolvedInfoType,
+                response.getTotalQuantity(),
+                response.getReviewQuantity()
+        );
+        return response;
+    }
+
+    private UserVocabularyInfoResponse buildVocabularyQuantityInfo(String userId) {
+        List<UserVocabularyLevelQuantityProjection> quantities =
+                userVocabularyRepository.countUserVocabularyByLevel(userId);
+        long totalQuantity = quantities.stream()
+                .map(UserVocabularyLevelQuantityProjection::getQuantity)
+                .filter(java.util.Objects::nonNull)
+                .mapToLong(Long::longValue)
+                .sum();
+        Map<Integer, Long> quantityByLevel = quantities.stream()
+                .filter(quantity -> quantity.getLevel() != null && quantity.getQuantity() != null)
+                .collect(Collectors.toMap(
+                        UserVocabularyLevelQuantityProjection::getLevel,
+                        UserVocabularyLevelQuantityProjection::getQuantity,
+                        Long::sum
+                ));
+        List<UserVocabularyLevelQuantityResponse> levelResponses = IntStream.rangeClosed(1, 6)
+                .mapToObj(level -> UserVocabularyLevelQuantityResponse.builder()
+                        .level(level)
+                        .quantity(quantityByLevel.getOrDefault(level, 0L))
+                        .build())
+                .toList();
+
+        return UserVocabularyInfoResponse.builder()
+                .userId(userId)
+                .infoType(UserVocabularyInfoType.VOCAB_QUANTITY)
+                .totalQuantity(totalQuantity)
+                .quantityByLevels(levelResponses)
+                .build();
+    }
+
+    private UserVocabularyInfoType parseInfoType(String infoType) {
+        try {
+            return UserVocabularyInfoType.valueOf(infoType.trim().toUpperCase(Locale.ROOT));
+        } catch (RuntimeException exception) {
+            throw new AppException(ErrorCode.INVALID_USER_VOCABULARY_INFO_TYPE);
+        }
     }
 
     public UserVocabularyStatisticResponse getUserDailyStatistic(String userId) {

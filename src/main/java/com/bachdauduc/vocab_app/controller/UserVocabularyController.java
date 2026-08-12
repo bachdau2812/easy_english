@@ -6,6 +6,7 @@ import com.bachdauduc.vocab_app.dto.request.uservocabulary.UserVocabularyRequest
 import com.bachdauduc.vocab_app.dto.response.ApiResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserSearchHistoryResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabAttemptResponse;
+import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyInfoResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyStatisticResponse;
 import com.bachdauduc.vocab_app.dto.response.worddata.WordResponse;
@@ -97,6 +98,17 @@ public class UserVocabularyController {
         log.info("Request received: action=getUserVocabByLevel, userId={}, level={}", userId, level);
         return success("Get user vocabularies successfully",
                 userVocabularyService.getUserVocabByLevel(userId, level, page, limit));
+    }
+
+    @GetMapping("/info")
+    public ApiResponse<UserVocabularyInfoResponse> getUserVocabularyInfo(
+            @RequestParam String userId,
+            @RequestParam String infoType
+    ) {
+        log.info("Request received: action=getUserVocabularyInfo, userId={}, infoType={}",
+                userId, infoType);
+        return success("Get user vocabulary info successfully",
+                userVocabularyService.getUserVocabularyInfo(userId, infoType));
     }
 
     @GetMapping("/statistics/daily")

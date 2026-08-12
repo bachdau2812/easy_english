@@ -2,6 +2,7 @@ package com.bachdauduc.vocab_app.repository;
 
 import com.bachdauduc.vocab_app.entity.UserVocabulary;
 import com.bachdauduc.vocab_app.repository.projection.UserVocabularyProjection;
+import com.bachdauduc.vocab_app.repository.projection.UserVocabularyLevelQuantityProjection;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -51,6 +52,29 @@ public interface UserVocabularyRepository extends JpaRepository<UserVocabulary, 
     boolean existsByUserIdAndWordIdAndSenseId(String userId, String wordId, String senseId);
 
     boolean existsByUserIdAndWordIdAndSenseLocalizedId(String userId, String wordId, String senseLocalizedId);
+
+    @Query("""
+            SELECT uv.level AS level, COUNT(uv) AS quantity
+            FROM UserVocabulary uv
+            WHERE uv.userId = :userId
+            GROUP BY uv.level
+            ORDER BY uv.level
+            """)
+    List<UserVocabularyLevelQuantityProjection> countUserVocabularyByLevel(
+            @Param("userId") String userId
+    );
+
+    @Query("""
+            SELECT COUNT(uv)
+            FROM UserVocabulary uv
+            WHERE uv.userId = :userId
+                AND uv.nextReviewAt IS NOT NULL
+                AND uv.nextReviewAt <= :now
+            """)
+    long countDueReviewVocabs(
+            @Param("userId") String userId,
+            @Param("now") LocalDateTime now
+    );
 
     @Query(value = """
             SELECT uv

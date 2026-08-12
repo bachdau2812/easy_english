@@ -159,6 +159,7 @@ Error codes:
 | 2021 | `Lesson not found` | 404 |
 | 2022 | `Invalid lesson type` | 400 |
 | 2023 | `User vocabulary already exists`; current duplicate save messages are `wordId + senseId already exists` or `wordId + senseLocalizedId already exists` | 400 |
+| 2030 | `Invalid user vocabulary info type` | 400 |
 | 3001 | `Notification template not found` | 404 |
 | 3002 | `Unsupported notification method` | 400 |
 | 3003 | `Push token not found` | 404 |
@@ -348,6 +349,7 @@ MOCHI mapping:
 | GET | `/user-vocabularies/search-history` | Yes | `userId`, `page=0`, `limit=20` | `Page<UserSearchHistoryResponse>` | `USER_NOT_FOUND` | Sorted by newest search |
 | GET | `/user-vocabularies/attempts` | Yes | `userId`, `from`, `to`, `page=0`, `limit=20`, `type?` | `Page<UserVocabAttemptResponse>` | `USER_NOT_FOUND` | `from`/`to` are `YYYY-MM-DD`; type can be `VOCAB`, `QUIZ`, `LAT`, or prefix |
 | GET | `/user-vocabularies/by-level` | Yes | `userId`, `level`, `page=0`, `limit=20` | `Page<UserVocabularyResponse>` | `USER_NOT_FOUND` | Level should be 1-6; response includes `word` from `words.word` |
+| GET | `/user-vocabularies/info` | Yes | `userId`, `infoType` | `UserVocabularyInfoResponse` | `USER_NOT_FOUND`, `INVALID_USER_VOCABULARY_INFO_TYPE` | `VOCAB_QUANTITY` fills `totalQuantity` and all levels 1-6; `VOCAB_REVIEW` fills `reviewQuantity`; fields not used by the selected type are `null` |
 | GET | `/user-vocabularies/statistics/daily` | Yes | `userId` | `UserVocabularyStatisticResponse` | `USER_NOT_FOUND` | Derived from attempts for current backend date; omits `wrongCountVocab`; `correctUniqueVocab` excludes vocab that had any wrong attempt that day |
 | GET | `/user-vocabularies/statistics/overall` | Yes | `userId` | `UserVocabularyStatisticResponse` | `USER_NOT_FOUND` | `mostWrongVocabIds` uses threshold `> 5` wrong attempts; omits `correctUniqueVocab` and `wrongUniqueVocab`; keeps `wrongCountVocab` |
 | GET | `/user-vocabularies/{userVocabId}/word` | Yes | Path `userVocabId` | `WordResponse` | `USER_VOCABULARY_NOT_FOUND`, `WORD_NOT_FOUND` | Returns word detail filtered down to saved sense/localized sense |
@@ -749,6 +751,23 @@ export interface UserVocabularyResponse {
   nextReviewAt?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
+}
+
+export type UserVocabularyInfoType =
+  | "VOCAB_QUANTITY"
+  | "VOCAB_REVIEW";
+
+export interface UserVocabularyLevelQuantityResponse {
+  level: number;
+  quantity: number;
+}
+
+export interface UserVocabularyInfoResponse {
+  userId: string;
+  infoType: UserVocabularyInfoType;
+  totalQuantity: number | null;
+  quantityByLevels: UserVocabularyLevelQuantityResponse[] | null;
+  reviewQuantity: number | null;
 }
 
 export interface UserVocabAttemptResponse {
