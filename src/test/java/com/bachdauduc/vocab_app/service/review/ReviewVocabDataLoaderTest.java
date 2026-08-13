@@ -87,6 +87,73 @@ class ReviewVocabDataLoaderTest {
         verify(snapshotCache).putAll(any(), any(), any());
     }
 
+    @Test
+    void loadsLocalizedOnlySenseWithoutLookingUpANullStandardSenseId() {
+        UserVocabulary vocabulary = new UserVocabulary();
+        vocabulary.setId("uv-1");
+        vocabulary.setWordId("word-1");
+        vocabulary.setSenseLocalizedId("localization-1");
+
+        WordSenseLocalization localizedSense = new WordSenseLocalization();
+        localizedSense.setId("localization-1");
+        localizedSense.setWordId("word-1");
+        localizedSense.setSource("MOCHI");
+        localizedSense.setLangCode("vi");
+        localizedSense.setShortMeaning("MOCHI meaning");
+
+        when(snapshotCache.lookup(any())).thenReturn(
+                new ReviewSnapshotLookup(Map.of(), Map.of("word-1", 0L)));
+        when(wordRepository.findAllById(any())).thenReturn(List.of(word()));
+        when(wordSenseRepository.findAllById(any())).thenReturn(List.of());
+        when(wordSenseLocalizationRepository.findAllById(any())).thenReturn(List.of(localizedSense));
+        when(wordSoundRepository.findByWordIdIn(any())).thenReturn(List.of());
+        when(wordExampleRepository.findBySenseIdIn(any())).thenReturn(List.of());
+
+        Map<String, ReviewVocabSnapshot> result = loader.load(List.of(vocabulary), "vi");
+
+        assertThat(result).containsKey("uv-1");
+        assertThat(result.get("uv-1").meaning()).isEqualTo("MOCHI meaning");
+    }
+
+    @Test
+    void prefersLocalizedSenseWhenBothSenseIdentifiersExist() {
+        UserVocabulary vocabulary = new UserVocabulary();
+        vocabulary.setId("uv-1");
+        vocabulary.setWordId("word-1");
+        vocabulary.setSenseId("sense-1");
+        vocabulary.setSenseLocalizedId("localization-1");
+
+        WordSenseLocalization localizedSense = new WordSenseLocalization();
+        localizedSense.setId("localization-1");
+        localizedSense.setWordId("word-1");
+        localizedSense.setSenseId("sense-1");
+        localizedSense.setSource("CUSTOM");
+        localizedSense.setLangCode("vi");
+        localizedSense.setShortMeaning("selected localized meaning");
+
+        WordSenseLocalization standardTranslation = new WordSenseLocalization();
+        standardTranslation.setId("translation-1");
+        standardTranslation.setWordId("word-1");
+        standardTranslation.setSenseId("sense-1");
+        standardTranslation.setSource("CUSTOM");
+        standardTranslation.setLangCode("vi");
+        standardTranslation.setShortMeaning("standard translation");
+
+        when(snapshotCache.lookup(any())).thenReturn(
+                new ReviewSnapshotLookup(Map.of(), Map.of("word-1", 0L)));
+        when(wordRepository.findAllById(any())).thenReturn(List.of(word()));
+        when(wordSenseRepository.findAllById(any())).thenReturn(List.of(sense()));
+        when(wordSenseLocalizationRepository.findAllById(any())).thenReturn(List.of(localizedSense));
+        when(wordSenseLocalizationRepository.findBySenseIdInAndLangCode(any(), eq("vi")))
+                .thenReturn(List.of(standardTranslation));
+        when(wordSoundRepository.findByWordIdIn(any())).thenReturn(List.of());
+        when(wordExampleRepository.findBySenseIdIn(any())).thenReturn(List.of());
+
+        Map<String, ReviewVocabSnapshot> result = loader.load(List.of(vocabulary), "vi");
+
+        assertThat(result.get("uv-1").meaning()).isEqualTo("selected localized meaning");
+    }
+
     private UserVocabulary vocabulary() {
         UserVocabulary value = new UserVocabulary();
         value.setId("uv-1");

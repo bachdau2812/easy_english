@@ -116,9 +116,9 @@ public class ReviewVocabDataLoader {
             ReviewVocabSnapshot snapshot = buildSnapshot(
                     vocabulary,
                     word,
-                    senses.get(vocabulary.getSenseId()),
-                    localizedSenses.get(vocabulary.getSenseLocalizedId()),
-                    translationsBySense.get(vocabulary.getSenseId()),
+                    valueByTextKey(senses, vocabulary.getSenseId()),
+                    valueByTextKey(localizedSenses, vocabulary.getSenseLocalizedId()),
+                    valueByTextKey(translationsBySense, vocabulary.getSenseId()),
                     soundsByWord.getOrDefault(vocabulary.getWordId(), List.of()),
                     examplesBySense.getOrDefault(exampleSenseId(vocabulary), List.of()),
                     exampleTranslations,
@@ -304,6 +304,10 @@ public class ReviewVocabDataLoader {
                 && StringUtils.hasText(vocabulary.getWordId())
                 && (StringUtils.hasText(vocabulary.getSenseId())
                 || StringUtils.hasText(vocabulary.getSenseLocalizedId()));
+    }
+
+    private <T> T valueByTextKey(Map<String, T> values, String key) {
+        return StringUtils.hasText(key) ? values.get(key) : null;
     }
 
     private <T> Set<String> values(List<UserVocabulary> vocabularies, Function<UserVocabulary, String> mapper) {
