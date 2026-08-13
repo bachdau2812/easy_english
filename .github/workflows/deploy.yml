@@ -56,7 +56,7 @@ jobs:
           
             set -e
           
-            cd /home/bachdd/vocab-deploy
+            cd /data/bachdd/vocab-deploy
           
             echo "Pulling backend image..."
             docker compose pull backend
