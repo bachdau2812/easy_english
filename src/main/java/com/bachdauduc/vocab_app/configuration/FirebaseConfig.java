@@ -12,18 +12,17 @@ import java.io.InputStream;
 
 @Configuration
 public class FirebaseConfig {
+
     @Bean
     FirebaseApp firebaseApp() throws IOException {
         if (!FirebaseApp.getApps().isEmpty()) {
             return FirebaseApp.getInstance();
         }
 
-        ClassPathResource resource = new ClassPathResource("social-app.json");
-        try (InputStream inputStream = resource.getInputStream()) {
-            FirebaseOptions options = FirebaseOptions.builder()
-                    .setCredentials(GoogleCredentials.fromStream(inputStream))
-                    .build();
-            return FirebaseApp.initializeApp(options);
-        }
+        FirebaseOptions options = FirebaseOptions.builder()
+                .setCredentials(GoogleCredentials.getApplicationDefault())
+                .build();
+
+        return FirebaseApp.initializeApp(options);
     }
 }
