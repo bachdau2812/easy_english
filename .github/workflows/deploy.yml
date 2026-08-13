@@ -27,9 +27,9 @@ jobs:
         with:
           context: .
           push: true
-          tags:
-            bachdau2812/vocab-backend:latest
-            bachdau2812/vocab-backend:${{ github.sha }}
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/vocab-backend:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/vocab-backend:${{ github.sha }}
 
       - name: Config SSH
         run: |
