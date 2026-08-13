@@ -32,15 +32,20 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/vocab-backend:${{ github.sha }}
 
       - name: Config SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
         run: |
-          mkdir -p ~.ssh
-          
-          echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/id_ed25519
-                    chmod 600 ~/.ssh/id_ed25519
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
 
           ssh-keyscan \
-            -p "${{ secrets.SERVER_PORT }}" \
-            "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts
+            -p "$SERVER_PORT" \
+            "$SERVER_HOST" >> "$HOME/.ssh/known_hosts"
 
       - name: Deploy backend
         run: |
