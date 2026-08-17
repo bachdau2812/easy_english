@@ -34,3 +34,5 @@ build/
 **/social-app.json
 logs/
 docs/
+.worktrees/
+.superpowers/
