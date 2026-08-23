@@ -497,7 +497,12 @@ public class UserVocabularyService {
     }
 
     private int requiredCorrectTurns(int level) {
-        return level == 5 ? 4 : 2;
+        return switch (level) {
+            case 1, 2, 3 -> 1;
+            case 4 -> 2;
+            case 5 -> 4;
+            default -> 2;
+        };
     }
 
     private int resolveLevel(Integer level) {
