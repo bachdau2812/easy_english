@@ -3,9 +3,9 @@ package com.bachdauduc.vocab_app.service;
 import com.bachdauduc.vocab_app.constant.UserVocabularyInfoType;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyInfoResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyLevelQuantityResponse;
+import com.bachdauduc.vocab_app.entity.UserVocabulary;
 import com.bachdauduc.vocab_app.exception.AppException;
 import com.bachdauduc.vocab_app.exception.ErrorCode;
-import com.bachdauduc.vocab_app.properties.RedisKeyProperties;
 import com.bachdauduc.vocab_app.repository.ListenAndTypeExerciseChallengeRepository;
 import com.bachdauduc.vocab_app.repository.UserInfoRepository;
 import com.bachdauduc.vocab_app.repository.UserSearchHistoryRepository;
@@ -15,12 +15,12 @@ import com.bachdauduc.vocab_app.repository.WordRepository;
 import com.bachdauduc.vocab_app.repository.WordSenseLocalizationRepository;
 import com.bachdauduc.vocab_app.repository.WordSenseRepository;
 import com.bachdauduc.vocab_app.repository.projection.UserVocabularyLevelQuantityProjection;
+import com.bachdauduc.vocab_app.service.review.ReviewAvailabilityService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.RedisTemplate;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -47,8 +47,7 @@ class UserVocabularyInfoServiceTest {
     @Mock WordSenseLocalizationRepository wordSenseLocalizationRepository;
     @Mock ListenAndTypeExerciseChallengeRepository listenAndTypeExerciseChallengeRepository;
     @Mock GetWordDataService getWordDataService;
-    @Mock RedisTemplate<String, String> redisTemplate;
-    @Mock RedisKeyProperties redisKeyProperties;
+    @Mock ReviewAvailabilityService reviewAvailabilityService;
 
     @InjectMocks UserVocabularyService service;
 
@@ -90,19 +89,28 @@ class UserVocabularyInfoServiceTest {
     @Test
     void returnsOnlyDueCountForVocabReview() {
         when(userInfoRepository.existsById("user-1")).thenReturn(true);
-        when(userVocabularyRepository.countDueReviewVocabs(
+        List<UserVocabulary> due = List.of(
+                mock(UserVocabulary.class),
+                mock(UserVocabulary.class),
+                mock(UserVocabulary.class)
+        );
+        when(userVocabularyRepository.findDueReviewVocabs(
                 org.mockito.ArgumentMatchers.eq("user-1"),
                 any(LocalDateTime.class)
-        )).thenReturn(18L);
+        )).thenReturn(due);
+        when(reviewAvailabilityService.findAvailable("user-1", due, "vi"))
+                .thenReturn(due.subList(0, 2));
 
         UserVocabularyInfoResponse response =
                 service.getUserVocabularyInfo("user-1", "VOCAB_REVIEW");
 
         assertThat(response.getInfoType()).isEqualTo(VOCAB_REVIEW);
-        assertThat(response.getReviewQuantity()).isEqualTo(18L);
+        assertThat(response.getReviewQuantity()).isEqualTo(2L);
         assertThat(response.getTotalQuantity()).isNull();
         assertThat(response.getQuantityByLevels()).isNull();
         verify(userVocabularyRepository, never()).countUserVocabularyByLevel("user-1");
+        verify(userVocabularyRepository, never())
+                .countDueReviewVocabs(any(String.class), any(LocalDateTime.class));
     }
 
     @Test

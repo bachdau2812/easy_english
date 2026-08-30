@@ -9,6 +9,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 
 import java.time.Clock;
@@ -16,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Set;
 
 import static com.bachdauduc.vocab_app.constant.ExerciseType.VOCAB_FILL_MISSING_WORD_PART;
 import static com.bachdauduc.vocab_app.constant.ExerciseType.VOCAB_WORD_TO_MEANING;
@@ -30,13 +32,14 @@ import static org.mockito.Mockito.when;
 class ReviewProgressStoreTest {
     @Mock RedisTemplate<String, String> redisTemplate;
     @Mock RedisKeyProperties redisKeyProperties;
+    @Mock ZSetOperations<String, String> zSetOperations;
 
     ReviewProgressStore store;
 
     @BeforeEach
     void setUp() {
-        when(redisKeyProperties.reviewProgressKey("user-1", "word-1"))
-                .thenReturn("review-progress:user-1:word-1");
+        when(redisKeyProperties.reviewProgressKey("user-1", "user-vocab-1"))
+                .thenReturn("review-progress:user-1:user-vocab-1");
         store = new ReviewProgressStore(
                 redisTemplate,
                 redisKeyProperties,
@@ -55,13 +58,13 @@ class ReviewProgressStoreTest {
 
         assertThat(store.reserveFirstAvailable(
                 "user-1",
-                "word-1",
+                "user-vocab-1",
                 List.of(VOCAB_WORD_TO_MEANING, VOCAB_FILL_MISSING_WORD_PART)
         )).contains(VOCAB_FILL_MISSING_WORD_PART);
 
         verify(redisTemplate).execute(
                 any(DefaultRedisScript.class),
-                eq(List.of("review-progress:user-1:word-1")),
+                eq(List.of("review-progress:user-1:user-vocab-1")),
                 any(Object[].class)
         );
     }
@@ -76,7 +79,7 @@ class ReviewProgressStoreTest {
         )).thenReturn(null);
 
         assertThat(store.reserveFirstAvailable(
-                "user-1", "word-1", List.of(VOCAB_WORD_TO_MEANING)
+                "user-1", "user-vocab-1", List.of(VOCAB_WORD_TO_MEANING)
         )).isEmpty();
     }
 
@@ -91,16 +94,60 @@ class ReviewProgressStoreTest {
 
         assertThat(store.reserveFirstAvailable(
                 "user-1",
-                "word-1",
+                "user-vocab-1",
                 List.of(VOCAB_WORD_TO_MEANING, VOCAB_FILL_MISSING_WORD_PART)
         )).contains(VOCAB_WORD_TO_MEANING);
     }
 
     @Test
     void releasesUnexpectedFailureReservation() {
-        store.release("user-1", "word-1", VOCAB_WORD_TO_MEANING);
+        store.release("user-1", "user-vocab-1", VOCAB_WORD_TO_MEANING);
 
         verify(redisTemplate).opsForZSet();
+    }
+
+    @Test
+    void excludesExerciseTypesWithActiveReservations() {
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+        when(zSetOperations.rangeByScore(
+                eq("review-progress:user-1:user-vocab-1"),
+                any(Double.class),
+                eq(Double.POSITIVE_INFINITY)
+        )).thenReturn(Set.of(VOCAB_WORD_TO_MEANING.name()));
+
+        assertThat(store.availableTypes(
+                "user-1",
+                "user-vocab-1",
+                Set.of(VOCAB_WORD_TO_MEANING, VOCAB_FILL_MISSING_WORD_PART)
+        )).containsExactly(VOCAB_FILL_MISSING_WORD_PART);
+    }
+
+    @Test
+    void keepsAllEligibleTypesWhenNoActiveReservationExists() {
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+        when(zSetOperations.rangeByScore(
+                eq("review-progress:user-1:user-vocab-1"),
+                any(Double.class),
+                eq(Double.POSITIVE_INFINITY)
+        )).thenReturn(Set.of());
+
+        assertThat(store.availableTypes(
+                "user-1",
+                "user-vocab-1",
+                Set.of(VOCAB_WORD_TO_MEANING, VOCAB_FILL_MISSING_WORD_PART)
+        )).containsExactlyInAnyOrder(VOCAB_WORD_TO_MEANING, VOCAB_FILL_MISSING_WORD_PART);
+    }
+
+    @Test
+    void keepsAllEligibleTypesWhenRedisAvailabilityReadFails() {
+        when(redisTemplate.opsForZSet())
+                .thenThrow(new RedisConnectionFailureException("offline"));
+
+        assertThat(store.availableTypes(
+                "user-1",
+                "user-vocab-1",
+                Set.of(VOCAB_WORD_TO_MEANING, VOCAB_FILL_MISSING_WORD_PART)
+        )).containsExactlyInAnyOrder(VOCAB_WORD_TO_MEANING, VOCAB_FILL_MISSING_WORD_PART);
     }
 
     private void stubTtls() {

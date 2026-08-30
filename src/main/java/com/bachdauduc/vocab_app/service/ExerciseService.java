@@ -38,11 +38,13 @@ import com.bachdauduc.vocab_app.repository.WordSenseRepository;
 import com.bachdauduc.vocab_app.repository.WordSoundRepository;
 import com.bachdauduc.vocab_app.repository.projection.WordExampleProjection;
 import com.bachdauduc.vocab_app.service.review.BalancedReviewQuizScheduler;
+import com.bachdauduc.vocab_app.service.review.ReviewAvailabilityService;
 import com.bachdauduc.vocab_app.service.review.ReviewProgressStore;
 import com.bachdauduc.vocab_app.service.review.ReviewQuizFactory;
 import com.bachdauduc.vocab_app.service.review.ReviewRequestContext;
 import com.bachdauduc.vocab_app.service.review.ReviewTargetEligibility;
 import com.bachdauduc.vocab_app.service.review.ReviewVocabDataLoader;
+import com.bachdauduc.vocab_app.service.review.ReviewVocabSelector;
 import com.bachdauduc.vocab_app.service.review.ReviewVocabSnapshot;
 import com.bachdauduc.vocab_app.utils.RedisUtil;
 import lombok.AccessLevel;
@@ -102,6 +104,8 @@ public class ExerciseService {
     BalancedReviewQuizScheduler balancedReviewQuizScheduler;
     ReviewQuizFactory reviewQuizFactory;
     ReviewProgressStore reviewProgressStore;
+    ReviewAvailabilityService reviewAvailabilityService;
+    ReviewVocabSelector reviewVocabSelector;
 
     public UserLessonResponse addUserLesson(UserLessonRequest request) {
         log.debug("Start service: method=addUserLesson, userId={}, lessonId={}, lessonType={}",
@@ -223,13 +227,21 @@ public class ExerciseService {
                 userId, totalReviewVocab, langCode);
         assertUserExists(userId);
 
-        List<UserVocabulary> selectedVocabs = selectReviewVocabs(userId, totalReviewVocab);
-        wordExampleGenerationService.ensureExamples(selectedVocabs);
+        List<UserVocabulary> dueVocabularies = userVocabularyRepository
+                .findDueReviewVocabs(userId, LocalDateTime.now());
+        List<UserVocabulary> availableVocabularies = reviewAvailabilityService
+                .findAvailable(userId, dueVocabularies, langCode);
+        List<UserVocabulary> orderedCandidates = reviewVocabSelector
+                .orderCandidates(availableVocabularies, totalReviewVocab);
+        List<UserVocabulary> initialCandidates = orderedCandidates.stream()
+                .limit(totalReviewVocab)
+                .toList();
+        wordExampleGenerationService.ensureExamples(initialCandidates);
         List<VocabReviewQuizResponse> quizzes =
-                generateReviewQuizzes(userId, selectedVocabs, langCode);
+                generateReviewQuizzes(userId, orderedCandidates, langCode, totalReviewVocab);
 
-        log.info("Review vocab quizzes generated: userId={}, requested={}, resultCount={}",
-                userId, totalReviewVocab, quizzes.size());
+        log.info("Review vocab quizzes generated: userId={}, dueCount={}, availableCount={}, requested={}, resultCount={}",
+                userId, dueVocabularies.size(), availableVocabularies.size(), totalReviewVocab, quizzes.size());
         return quizzes;
     }
 
@@ -252,7 +264,8 @@ public class ExerciseService {
                 userId,
                 contextVocabularies,
                 langCode,
-                Set.of(userVocabId)
+                Set.of(userVocabId),
+                1
         ).stream().findFirst();
         log.info("Single review vocab quiz generated: userId={}, userVocabId={}, resultCount={}",
                 userId, userVocabId, quiz.isPresent() ? 1 : 0);
@@ -262,19 +275,27 @@ public class ExerciseService {
     private List<VocabReviewQuizResponse> generateReviewQuizzes(
             String userId,
             List<UserVocabulary> contextVocabularies,
-            String langCode
+            String langCode,
+            int maximumQuizCount
     ) {
         Set<String> targetIds = contextVocabularies.stream()
                 .map(UserVocabulary::getId)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
-        return generateReviewQuizzes(userId, contextVocabularies, langCode, targetIds);
+        return generateReviewQuizzes(
+                userId,
+                contextVocabularies,
+                langCode,
+                targetIds,
+                maximumQuizCount
+        );
     }
 
     private List<VocabReviewQuizResponse> generateReviewQuizzes(
             String userId,
             List<UserVocabulary> contextVocabularies,
             String langCode,
-            Set<String> targetIds
+            Set<String> targetIds,
+            int maximumQuizCount
     ) {
         if (contextVocabularies.isEmpty() || targetIds.isEmpty()) {
             return List.of();
@@ -304,6 +325,9 @@ public class ExerciseService {
         List<VocabReviewQuizResponse> quizzes = new ArrayList<>();
         Map<ExerciseType, Integer> emittedCounts = new java.util.EnumMap<>(ExerciseType.class);
         for (UserVocabulary vocabulary : contextVocabularies) {
+            if (quizzes.size() >= maximumQuizCount) {
+                break;
+            }
             if (!targetIds.contains(vocabulary.getId())) {
                 continue;
             }
@@ -318,7 +342,7 @@ public class ExerciseService {
                     emittedCounts
             );
             Optional<ExerciseType> reservedType =
-                    reviewProgressStore.reserveFirstAvailable(userId, snapshot.wordId(), candidates);
+                    reviewProgressStore.reserveFirstAvailable(userId, vocabulary.getId(), candidates);
             if (reservedType.isEmpty()) {
                 continue;
             }
@@ -358,7 +382,7 @@ public class ExerciseService {
         try {
             return Optional.of(reviewQuizFactory.create(vocabulary, snapshot, context, type));
         } catch (AppException exception) {
-            reviewProgressStore.release(userId, snapshot.wordId(), type);
+            reviewProgressStore.release(userId, vocabulary.getId(), type);
             log.warn(
                     "Review quiz creation skipped: userVocabId={}, wordId={}, type={}, errorCode={}",
                     vocabulary.getId(),
@@ -560,79 +584,6 @@ public class ExerciseService {
                 .sentence(sentenceBlank.sentence())
                 .trans(sentenceBlank.trans())
                 .build();
-    }
-
-    private List<UserVocabulary> selectReviewVocabs(String userId, int totalReviewVocab) {
-        Map<Integer, Integer> quotas = reviewQuotas(totalReviewVocab);
-        List<UserVocabulary> dueVocabs = userVocabularyRepository.findDueReviewVocabs(userId, LocalDateTime.now());
-        log.debug("Due review vocabs loaded: userId={}, dueCount={}, requested={}, quotas={}",
-                userId, dueVocabs.size(), totalReviewVocab, quotas);
-        if (dueVocabs.isEmpty()) {
-            return List.of();
-        }
-
-        Map<Integer, List<UserVocabulary>> byLevel = dueVocabs.stream()
-                .collect(Collectors.groupingBy(UserVocabulary::getLevel, LinkedHashMap::new, Collectors.toCollection(ArrayList::new)));
-        byLevel.values().forEach(Collections::shuffle);
-
-        if (byLevel.size() == 1 && byLevel.containsKey(1)) {
-            List<UserVocabulary> selectedLevelOne = byLevel.get(1).stream()
-                    .limit(totalReviewVocab)
-                    .toList();
-            log.info("Review vocab selected from level 1 only: userId={}, selectedCount={}",
-                    userId, selectedLevelOne.size());
-            return selectedLevelOne;
-        }
-
-        List<UserVocabulary> selected = new ArrayList<>();
-        Set<String> selectedIds = new LinkedHashSet<>();
-        takeByQuota(byLevel, quotas, selected, selectedIds, totalReviewVocab);
-
-        boolean changed;
-        do {
-            int before = selected.size();
-            takeByQuota(byLevel, quotas, selected, selectedIds, totalReviewVocab);
-            changed = selected.size() > before;
-        } while (selected.size() < totalReviewVocab && changed);
-
-        log.info("Review vocab selected: userId={}, requested={}, selectedCount={}, selectedByLevel={}",
-                userId,
-                totalReviewVocab,
-                selected.size(),
-                selected.stream().collect(Collectors.groupingBy(UserVocabulary::getLevel, Collectors.counting())));
-        return selected;
-    }
-
-    private void takeByQuota(
-            Map<Integer, List<UserVocabulary>> byLevel,
-            Map<Integer, Integer> quotas,
-            List<UserVocabulary> selected,
-            Set<String> selectedIds,
-            int totalReviewVocab
-    ) {
-        for (int level = 1; level <= 6 && selected.size() < totalReviewVocab; level++) {
-            List<UserVocabulary> levelVocabs = byLevel.getOrDefault(level, List.of());
-            int quota = quotas.getOrDefault(level, 0);
-            int taken = 0;
-            for (UserVocabulary userVocabulary : levelVocabs) {
-                if (taken >= quota || selected.size() >= totalReviewVocab) {
-                    break;
-                }
-                if (selectedIds.add(userVocabulary.getId())) {
-                    selected.add(userVocabulary);
-                    taken++;
-                }
-            }
-        }
-    }
-
-    private Map<Integer, Integer> reviewQuotas(int totalReviewVocab) {
-        return switch (totalReviewVocab) {
-            case 30 -> Map.of(1, 9, 2, 8, 3, 5, 4, 3, 5, 3, 6, 2);
-            case 60 -> Map.of(1, 15, 2, 15, 3, 10, 4, 10, 5, 5, 6, 5);
-            case 90 -> Map.of(1, 25, 2, 25, 3, 14, 4, 13, 5, 10, 6, 8);
-            default -> throw new AppException(ErrorCode.INVALID_REVIEW_VOCAB_TOTAL);
-        };
     }
 
     private List<VocabContext> buildVocabContexts(List<String> userVocabIds, String langCode) {

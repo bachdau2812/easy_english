@@ -30,9 +30,6 @@ public class RedisKeyProperties {
     @Value("${redis.key.word-without-trans}")
     private String wordWithoutTransPattern;
 
-    @Value("${redis.key.current-review-wrong}")
-    private String currentReviewWrongPattern;
-
     @Value("${redis.key.reading-quiz}")
     private String readingQuizPattern;
 
@@ -53,9 +50,6 @@ public class RedisKeyProperties {
 
     @Value("${redis.ttl.logout-days}")
     private long logoutTtlDays;
-
-    @Value("${redis.ttl.current-review-wrong-hours}")
-    private long currentReviewWrongTtlHours;
 
     @Value("${redis.ttl.review-vocab-snapshot-hours}")
     private long reviewVocabSnapshotTtlHours;
@@ -97,10 +91,6 @@ public class RedisKeyProperties {
         return wordWithoutTransPattern.formatted(wordId);
     }
 
-    public String currentReviewWrongKey(String userVocabId) {
-        return currentReviewWrongPattern.formatted(userVocabId);
-    }
-
     public String reviewVocabRevisionKey(String wordId) {
         return reviewVocabRevisionPattern.formatted(wordId);
     }
@@ -114,8 +104,8 @@ public class RedisKeyProperties {
         return reviewVocabSnapshotPattern.formatted(wordId, senseKey, langCode, revision);
     }
 
-    public String reviewProgressKey(String userId, String wordId) {
-        return reviewProgressPattern.formatted(userId, wordId);
+    public String reviewProgressKey(String userId, String userVocabId) {
+        return reviewProgressPattern.formatted(userId, userVocabId);
     }
 
     public String readingQuizKey(String readingSourceId) {
@@ -132,10 +122,6 @@ public class RedisKeyProperties {
 
     public Duration logoutTtl() {
         return Duration.ofDays(logoutTtlDays);
-    }
-
-    public Duration currentReviewWrongTtl() {
-        return Duration.ofHours(currentReviewWrongTtlHours);
     }
 
     public Duration reviewVocabSnapshotTtl() {

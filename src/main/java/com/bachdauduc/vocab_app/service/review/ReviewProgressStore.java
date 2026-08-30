@@ -11,9 +11,12 @@ import org.springframework.stereotype.Service;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -60,7 +63,7 @@ public class ReviewProgressStore {
 
     public Optional<ExerciseType> reserveFirstAvailable(
             String userId,
-            String wordId,
+            String userVocabId,
             List<ExerciseType> candidates
     ) {
         List<ExerciseType> usableCandidates = new ArrayList<>(new LinkedHashSet<>(candidates))
@@ -78,7 +81,7 @@ public class ReviewProgressStore {
         arguments.add(redisKeyProperties.reviewProgressCleanupTtl().toSeconds());
         usableCandidates.stream().map(Enum::name).forEach(arguments::add);
 
-        String key = redisKeyProperties.reviewProgressKey(userId, wordId);
+        String key = redisKeyProperties.reviewProgressKey(userId, userVocabId);
         try {
             String reserved = redisTemplate.execute(
                     reserveScript,
@@ -87,17 +90,60 @@ public class ReviewProgressStore {
             );
             return Optional.ofNullable(reserved).map(ExerciseType::valueOf);
         } catch (RuntimeException exception) {
-            log.warn("Redis review progress unavailable for wordId={}; using request-local fallback", wordId);
+            log.warn("Redis review progress unavailable for userVocabId={}; using request-local fallback",
+                    userVocabId);
             return Optional.of(usableCandidates.getFirst());
         }
     }
 
-    public void release(String userId, String wordId, ExerciseType type) {
-        String key = redisKeyProperties.reviewProgressKey(userId, wordId);
+    public Set<ExerciseType> availableTypes(
+            String userId,
+            String userVocabId,
+            Set<ExerciseType> eligibleTypes
+    ) {
+        EnumSet<ExerciseType> available = EnumSet.noneOf(ExerciseType.class);
+        if (eligibleTypes != null) {
+            eligibleTypes.stream()
+                    .filter(ExerciseType::isVocab)
+                    .forEach(available::add);
+        }
+        if (available.isEmpty()) {
+            return Set.of();
+        }
+
+        String key = redisKeyProperties.reviewProgressKey(userId, userVocabId);
+        try {
+            double firstActiveScore = clock.instant().toEpochMilli() + 1D;
+            Set<String> activeReservations = redisTemplate.opsForZSet()
+                    .rangeByScore(key, firstActiveScore, Double.POSITIVE_INFINITY);
+            if (activeReservations != null) {
+                activeReservations.stream()
+                        .map(this::parseExerciseType)
+                        .flatMap(Optional::stream)
+                        .forEach(available::remove);
+            }
+        } catch (RuntimeException exception) {
+            log.warn("Redis review availability unavailable for userVocabId={}; treating eligible types as available",
+                    userVocabId);
+        }
+        return Collections.unmodifiableSet(available);
+    }
+
+    public void release(String userId, String userVocabId, ExerciseType type) {
+        String key = redisKeyProperties.reviewProgressKey(userId, userVocabId);
         try {
             redisTemplate.opsForZSet().remove(key, type.name());
         } catch (RuntimeException exception) {
-            log.warn("Could not release review progress reservation for wordId={}, type={}", wordId, type);
+            log.warn("Could not release review progress reservation for userVocabId={}, type={}",
+                    userVocabId, type);
+        }
+    }
+
+    private Optional<ExerciseType> parseExerciseType(String value) {
+        try {
+            return Optional.of(ExerciseType.valueOf(value));
+        } catch (RuntimeException exception) {
+            return Optional.empty();
         }
     }
 }

@@ -20,7 +20,6 @@ import com.bachdauduc.vocab_app.entity.UserVocabulary;
 import com.bachdauduc.vocab_app.entity.WordSenseLocalization;
 import com.bachdauduc.vocab_app.exception.AppException;
 import com.bachdauduc.vocab_app.exception.ErrorCode;
-import com.bachdauduc.vocab_app.properties.RedisKeyProperties;
 import com.bachdauduc.vocab_app.repository.ListenAndTypeExerciseChallengeRepository;
 import com.bachdauduc.vocab_app.repository.UserInfoRepository;
 import com.bachdauduc.vocab_app.repository.UserSearchHistoryRepository;
@@ -35,17 +34,18 @@ import com.bachdauduc.vocab_app.repository.projection.UserVocabStatisticProjecti
 import com.bachdauduc.vocab_app.repository.projection.UserVocabularyProjection;
 import com.bachdauduc.vocab_app.repository.projection.UserVocabularyLevelQuantityProjection;
 import com.bachdauduc.vocab_app.repository.projection.WrongVocabProjection;
+import com.bachdauduc.vocab_app.service.review.ReviewAvailabilityService;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -71,8 +71,8 @@ public class UserVocabularyService {
     WordSenseLocalizationRepository wordSenseLocalizationRepository;
     ListenAndTypeExerciseChallengeRepository listenAndTypeExerciseChallengeRepository;
     GetWordDataService getWordDataService;
-    RedisTemplate<String, String> redisTemplate;
-    RedisKeyProperties redisKeyProperties;
+    ReviewAvailabilityService reviewAvailabilityService;
+    Clock clock;
 
     @Transactional
     public UserVocabularyResponse addUserVocab(UserVocabularyRequest request) {
@@ -104,7 +104,13 @@ public class UserVocabularyService {
                 request.getUserId(), request.getUserVocabId(), request.getAttemptId(), request.getExerciseType(),
                 request.getCorrect(), request.getReplayCount());
         assertUserExists(request.getUserId());
-        validateExerciseTarget(request);
+        UserVocabulary userVocabulary = request.getExerciseType().isVocab()
+                ? getOwnedUserVocabularyForUpdate(request.getUserVocabId(), request.getUserId())
+                : null;
+        if (userVocabulary == null) {
+            validateExerciseTarget(request);
+        }
+        LocalDateTime reviewTime = LocalDateTime.now(clock);
 
         UserVocabAttempt attempt = new UserVocabAttempt();
         attempt.setId(UUID.randomUUID().toString());
@@ -119,19 +125,18 @@ public class UserVocabularyService {
 
         UserVocabAttempt savedAttempt = userVocabAttemptRepository.save(attempt);
 
-        if (request.getExerciseType().isVocab()) {
-            UserVocabulary userVocabulary = getRequiredUserVocabulary(request.getUserVocabId());
-            if (shouldUpdateReviewSchedule(request)) {
+        if (userVocabulary != null) {
+            if (isReviewDue(userVocabulary, reviewTime)) {
                 Integer oldLevel = userVocabulary.getLevel();
                 Integer oldTurns = userVocabulary.getCurrentLevelCorrectTurns();
-                updateReviewSchedule(userVocabulary, request.getCorrect());
+                updateReviewSchedule(userVocabulary, request.getCorrect(), reviewTime);
                 userVocabularyRepository.save(userVocabulary);
                 log.info("User vocabulary review schedule updated: userId={}, userVocabId={}, oldLevel={}, newLevel={}, oldTurns={}, newTurns={}, correct={}, nextReviewAt={}",
                         request.getUserId(), userVocabulary.getId(), oldLevel, userVocabulary.getLevel(), oldTurns,
                         userVocabulary.getCurrentLevelCorrectTurns(), request.getCorrect(), userVocabulary.getNextReviewAt());
             } else {
-                log.info("User vocabulary review schedule skipped: userId={}, userVocabId={}, correct={}, reason=wrong_attempt_already_counted",
-                        request.getUserId(), userVocabulary.getId(), request.getCorrect());
+                log.info("User vocabulary review schedule skipped: userId={}, userVocabId={}, correct={}, reason=review_turn_already_counted, nextReviewAt={}",
+                        request.getUserId(), userVocabulary.getId(), request.getCorrect(), userVocabulary.getNextReviewAt());
             }
         }
 
@@ -222,10 +227,11 @@ public class UserVocabularyService {
             case VOCAB_REVIEW -> UserVocabularyInfoResponse.builder()
                     .userId(userId)
                     .infoType(resolvedInfoType)
-                    .reviewQuantity(userVocabularyRepository.countDueReviewVocabs(
+                    .reviewQuantity((long) reviewAvailabilityService.findAvailable(
                             userId,
-                            LocalDateTime.now()
-                    ))
+                            userVocabularyRepository.findDueReviewVocabs(userId, LocalDateTime.now()),
+                            "vi"
+                    ).size())
                     .build();
         };
         log.info(
@@ -412,33 +418,24 @@ public class UserVocabularyService {
         }
     }
 
-    private boolean shouldUpdateReviewSchedule(SubmitReviewAttemptRequest request) {
-        if (Boolean.TRUE.equals(request.getCorrect())) {
-            return true;
-        }
-
-        String key = redisKeyProperties.currentReviewWrongKey(request.getUserVocabId());
-        if (Boolean.TRUE.equals(redisTemplate.hasKey(key))) {
-            log.debug("Wrong review update skipped by redis marker: key={}, userVocabId={}",
-                    key, request.getUserVocabId());
-            return false;
-        }
-
-        redisTemplate.opsForValue().set(key, "1", redisKeyProperties.currentReviewWrongTtl());
-        log.debug("Wrong review redis marker saved: key={}, ttlSeconds={}",
-                key, redisKeyProperties.currentReviewWrongTtl().toSeconds());
-        return true;
+    private boolean isReviewDue(UserVocabulary userVocabulary, LocalDateTime reviewTime) {
+        return userVocabulary.getNextReviewAt() == null
+                || !userVocabulary.getNextReviewAt().isAfter(reviewTime);
     }
 
-    private void updateReviewSchedule(UserVocabulary userVocabulary, boolean correct) {
+    private void updateReviewSchedule(
+            UserVocabulary userVocabulary,
+            boolean correct,
+            LocalDateTime reviewTime
+    ) {
         int currentLevel = normalizeLevel(userVocabulary.getLevel());
         int currentTurns = userVocabulary.getCurrentLevelCorrectTurns() == null
                 ? 0
                 : userVocabulary.getCurrentLevelCorrectTurns();
 
         ReviewUpdate reviewUpdate = correct
-                ? nextCorrectReview(currentLevel, currentTurns)
-                : nextWrongReview(currentLevel);
+                ? nextCorrectReview(currentLevel, currentTurns, reviewTime)
+                : nextWrongReview(currentLevel, reviewTime);
 
         userVocabulary.setLevel(reviewUpdate.level());
         userVocabulary.setCurrentLevelCorrectTurns(reviewUpdate.currentLevelCorrectTurns());
@@ -448,8 +445,7 @@ public class UserVocabularyService {
                 reviewUpdate.currentLevelCorrectTurns(), reviewUpdate.nextReviewAt());
     }
 
-    private ReviewUpdate nextCorrectReview(int level, int currentTurns) {
-        LocalDateTime now = LocalDateTime.now();
+    private ReviewUpdate nextCorrectReview(int level, int currentTurns, LocalDateTime now) {
         if (level == 6) {
             int newTurns = currentTurns + 1;
             return new ReviewUpdate(6, newTurns, switch (Math.min(newTurns, 4)) {
@@ -469,8 +465,7 @@ public class UserVocabularyService {
         return new ReviewUpdate(newLevel, savedTurns, correctNextReviewAt(level, levelUp, now));
     }
 
-    private ReviewUpdate nextWrongReview(int level) {
-        LocalDateTime now = LocalDateTime.now();
+    private ReviewUpdate nextWrongReview(int level, LocalDateTime now) {
         if (level == 6) {
             return new ReviewUpdate(5, 0, now.plusDays(3));
         }
@@ -593,6 +588,19 @@ public class UserVocabularyService {
     private UserVocabulary getRequiredUserVocabulary(String userVocabId) {
         return userVocabularyRepository.findById(userVocabId)
                 .orElseThrow(() -> new AppException(ErrorCode.USER_VOCABULARY_NOT_FOUND));
+    }
+
+    private UserVocabulary getOwnedUserVocabularyForUpdate(String userVocabId, String userId) {
+        if (!StringUtils.hasText(userVocabId)) {
+            throw new AppException(ErrorCode.USER_VOCABULARY_NOT_FOUND);
+        }
+
+        UserVocabulary userVocabulary = userVocabularyRepository.findByIdForUpdate(userVocabId)
+                .orElseThrow(() -> new AppException(ErrorCode.USER_VOCABULARY_NOT_FOUND));
+        if (!userId.equals(userVocabulary.getUserId())) {
+            throw new AppException(ErrorCode.USER_VOCABULARY_NOT_FOUND);
+        }
+        return userVocabulary;
     }
 
     private void assertUserExists(String userId) {
