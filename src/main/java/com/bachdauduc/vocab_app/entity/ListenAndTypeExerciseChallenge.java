@@ -38,6 +38,9 @@ public class ListenAndTypeExerciseChallenge {
     @Column(name = "solution", columnDefinition = "LONGTEXT")
     private String solution;
 
+    @Column(name = "translate", columnDefinition = "LONGTEXT")
+    private String translate;
+
     @Column(name = "time_start", precision = 10, scale = 3)
     private BigDecimal timeStart;
 

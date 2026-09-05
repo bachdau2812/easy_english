@@ -22,6 +22,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -60,6 +61,7 @@ public class AzureTranslator implements GetTranslation {
                     .toList();
 
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(20))
                     .uri(URI.create(buildTranslateUri(transLangCode)))
                     .header("Ocp-Apim-Subscription-Key", apiKey)
                     .header("Ocp-Apim-Subscription-Region", region)
@@ -67,8 +69,10 @@ public class AzureTranslator implements GetTranslation {
                     .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body), StandardCharsets.UTF_8))
                     .build();
 
-            HttpResponse<String> response = HttpClient.newHttpClient()
-                    .send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            HttpResponse<String> response;
+            try (HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build()) {
+                response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            }
 
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 log.error("Azure translation failed: status={}", response.statusCode());
@@ -84,6 +88,9 @@ public class AzureTranslator implements GetTranslation {
             return translatedByOriginalText;
         } catch (AppException exception) {
             throw exception;
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AppException(ErrorCode.TRANSLATION_FAILED);
         } catch (Exception exception) {
             log.error("Azure translation failed", exception);
             throw new AppException(ErrorCode.TRANSLATION_FAILED);

@@ -38,6 +38,7 @@ public class ListenAndTypeLessonResponse {
         String content;
         String jsonContent;
         String solution;
+        String translate;
         BigDecimal timeStart;
         BigDecimal timeEnd;
         String hints;

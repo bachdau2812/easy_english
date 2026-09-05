@@ -106,6 +106,7 @@ public class ExerciseService {
     ReviewProgressStore reviewProgressStore;
     ReviewAvailabilityService reviewAvailabilityService;
     ReviewVocabSelector reviewVocabSelector;
+    ListenAndTypeTranslationService listenAndTypeTranslationService;
 
     public UserLessonResponse addUserLesson(UserLessonRequest request) {
         log.debug("Start service: method=addUserLesson, userId={}, lessonId={}, lessonType={}",
@@ -149,7 +150,7 @@ public class ExerciseService {
         assertUserExists(userId);
         ListenExercise lesson = getRequiredListenExercise(lessonId);
         List<ListenAndTypeExerciseChallenge> challenges =
-                listenAndTypeExerciseChallengeRepository.findByListenExerciseIdOrderByPositionAsc(lessonId);
+                listenAndTypeTranslationService.loadTranslatedChallenges(lessonId);
         List<String> completedChallengeIds = getCompletedListenAndTypeChallengeIds(userId, lessonId);
         Set<String> completedChallengeIdSet = new LinkedHashSet<>(completedChallengeIds);
         log.info("Listen-and-type lesson loaded: userId={}, lessonId={}, challengeCount={}, completedChallengeCount={}",
@@ -1167,6 +1168,7 @@ public class ExerciseService {
                 .content(challenge.getContent())
                 .jsonContent(challenge.getJsonContent())
                 .solution(challenge.getSolution())
+                .translate(StringUtils.hasText(challenge.getTranslate()) ? challenge.getTranslate() : null)
                 .timeStart(challenge.getTimeStart())
                 .timeEnd(challenge.getTimeEnd())
                 .hints(challenge.getHints())
