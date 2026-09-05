@@ -2,10 +2,12 @@ package com.bachdauduc.vocab_app.repository;
 
 import com.bachdauduc.vocab_app.entity.UserVocabulary;
 import com.bachdauduc.vocab_app.repository.projection.UserVocabularyProjection;
+import com.bachdauduc.vocab_app.repository.projection.UserVocabularyExportProjection;
 import com.bachdauduc.vocab_app.repository.projection.UserVocabularyAutocompleteProjection;
 import com.bachdauduc.vocab_app.repository.projection.UserVocabularyLevelQuantityProjection;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -22,6 +24,38 @@ public interface UserVocabularyRepository extends JpaRepository<UserVocabulary, 
     Optional<UserVocabulary> findByIdForUpdate(@Param("id") String id);
 
     Page<UserVocabulary> findByUserIdAndLevel(String userId, Integer level, Pageable pageable);
+
+    @Query(value = """
+            SELECT w.word AS word, w.pos AS pos, uv.level AS level,
+                COALESCE(
+                    CASE WHEN saved.lang_code = :langCode THEN NULLIF(TRIM(saved.short_meaning), '') END,
+                    CASE WHEN saved.lang_code = :langCode
+                         THEN NULLIF(TRIM(saved.full_localized_definition), '') END,
+                    (SELECT COALESCE(NULLIF(TRIM(trans.short_meaning), ''),
+                                     NULLIF(TRIM(trans.full_localized_definition), ''))
+                     FROM word_sense_localizations trans
+                     WHERE trans.sense_id = ws.id AND trans.word_id = w.id
+                         AND trans.lang_code = :langCode
+                         AND (NULLIF(TRIM(trans.short_meaning), '') IS NOT NULL
+                              OR NULLIF(TRIM(trans.full_localized_definition), '') IS NOT NULL)
+                     ORDER BY trans.id ASC
+                     LIMIT 1),
+                    ws.definition, ''
+                ) AS wordSense
+            FROM user_vocabularies uv
+            JOIN words w ON w.id = uv.word_id
+            LEFT JOIN word_sense_localizations saved
+                ON saved.id = uv.sense_localized_id AND saved.word_id = uv.word_id
+            LEFT JOIN word_senses ws
+                ON ws.id = COALESCE(uv.sense_id, saved.sense_id) AND ws.word_id = uv.word_id
+            WHERE uv.user_id = :userId
+            ORDER BY w.normalized_word ASC, w.word ASC, uv.id ASC
+            """, nativeQuery = true)
+    Slice<UserVocabularyExportProjection> findUserVocabularyForExport(
+            @Param("userId") String userId,
+            @Param("langCode") String langCode,
+            Pageable pageable
+    );
 
     @Query(
             value = """

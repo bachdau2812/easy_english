@@ -36,6 +36,7 @@ public enum ErrorCode {
     GROQ_API_KEY_NOT_CONFIGURED(2028, "Groq API key is not configured", HttpStatus.BAD_REQUEST),
     WORD_EXAMPLE_GENERATION_FAILED(2029, "Word example generation failed", HttpStatus.BAD_REQUEST),
     INVALID_USER_VOCABULARY_INFO_TYPE(2030, "Invalid user vocabulary info type", HttpStatus.BAD_REQUEST),
+    USER_VOCABULARY_EXPORT_FAILED(2031, "Could not export vocabulary", HttpStatus.INTERNAL_SERVER_ERROR),
     NOTIFICATION_TEMPLATE_NOT_FOUND(3001, "Notification template not found", HttpStatus.NOT_FOUND),
     UNSUPPORTED_NOTIFICATION_METHOD(3002, "Unsupported notification method", HttpStatus.BAD_REQUEST),
     PUSH_TOKEN_NOT_FOUND(3003, "Push token not found", HttpStatus.NOT_FOUND),

@@ -202,6 +202,7 @@ public class SecurityConfig {
 
         // 3. Cho phép tất cả các header (Authorization, Content-Type...)
         configuration.setAllowedHeaders(Collections.singletonList("*"));
+        configuration.setExposedHeaders(Collections.singletonList("Content-Disposition"));
 
         // 4. Cho phép gửi thông tin xác thực (Cookies, JWT Token...)
         configuration.setAllowCredentials(true);
