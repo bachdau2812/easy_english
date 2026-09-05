@@ -56,6 +56,78 @@ public interface UserVocabularyRepository extends JpaRepository<UserVocabulary, 
             Pageable pageable
     );
 
+
+
+    @Query(
+            value = """
+                    SELECT
+                        uv.id AS id,
+                        uv.user_id AS userId,
+                        uv.word_id AS wordId,
+                        w.word AS word,
+                        uv.sense_id AS senseId,
+                        uv.sense_localized_id AS senseLocalizedId,
+                        uv.level AS level,
+                        uv.current_level_correct_turns AS currentLevelCorrectTurns,
+                        uv.next_review_at AS nextReviewAt,
+                        uv.created_at AS createdAt,
+                        uv.updated_at AS updatedAt
+                    FROM user_vocabularies uv
+                    JOIN words w ON uv.word_id = w.id
+                    WHERE uv.user_id = :userId
+                        AND w.normalized_word = :normalizedText
+                    ORDER BY w.normalized_word ASC, w.word ASC, uv.created_at DESC, uv.id DESC
+                    """,
+            countQuery = """
+                    SELECT COUNT(*)
+                    FROM user_vocabularies uv
+                    JOIN words w ON uv.word_id = w.id
+                    WHERE uv.user_id = :userId
+                        AND w.normalized_word = :normalizedText
+                    """,
+            nativeQuery = true
+    )
+    Page<UserVocabularyProjection> findUserVocabByNormalizedWord(
+            @Param("userId") String userId,
+            @Param("normalizedText") String normalizedText,
+            Pageable pageable
+    );
+
+    @Query(
+            value = """
+                    SELECT
+                        uv.id AS id,
+                        uv.user_id AS userId,
+                        uv.word_id AS wordId,
+                        w.word AS word,
+                        uv.sense_id AS senseId,
+                        uv.sense_localized_id AS senseLocalizedId,
+                        uv.level AS level,
+                        uv.current_level_correct_turns AS currentLevelCorrectTurns,
+                        uv.next_review_at AS nextReviewAt,
+                        uv.created_at AS createdAt,
+                        uv.updated_at AS updatedAt
+                    FROM user_vocabularies uv
+                    JOIN words w ON uv.word_id = w.id
+                    WHERE uv.user_id = :userId
+                        AND w.normalized_word LIKE CONCAT(:normalizedPrefix, '%')
+                    ORDER BY w.normalized_word ASC, w.word ASC, uv.created_at DESC, uv.id DESC
+                    """,
+            countQuery = """
+                    SELECT COUNT(*)
+                    FROM user_vocabularies uv
+                    JOIN words w ON uv.word_id = w.id
+                    WHERE uv.user_id = :userId
+                        AND w.normalized_word LIKE CONCAT(:normalizedPrefix, '%')
+                    """,
+            nativeQuery = true
+    )
+    Page<UserVocabularyProjection> findUserVocabByNormalizedWordPrefix(
+            @Param("userId") String userId,
+            @Param("normalizedPrefix") String normalizedPrefix,
+            Pageable pageable
+    );
+
     boolean existsByUserIdAndWordIdAndSenseId(String userId, String wordId, String senseId);
 
     boolean existsByUserIdAndWordIdAndSenseLocalizedId(String userId, String wordId, String senseLocalizedId);
