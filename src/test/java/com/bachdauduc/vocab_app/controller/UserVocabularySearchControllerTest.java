@@ -2,6 +2,7 @@ package com.bachdauduc.vocab_app.controller;
 
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularySearchResponse;
+import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyAutocompleteResponse;
 import com.bachdauduc.vocab_app.dto.response.worddata.WordResponse;
 import com.bachdauduc.vocab_app.dto.response.worddata.WordSenseResponse;
 import com.bachdauduc.vocab_app.service.UserVocabularyService;
@@ -12,6 +13,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
@@ -58,7 +60,7 @@ class UserVocabularySearchControllerTest {
                         .build())
                 .build();
         when(userVocabularyService.searchUserVocabulary(
-                "user-1", "app", false, 0, 20
+                "user-1", "app", 0, 20
         )).thenReturn(new PageImpl<>(
                 List.of(item),
                 PageRequest.of(0, 20),
@@ -66,7 +68,7 @@ class UserVocabularySearchControllerTest {
         ));
 
         mockMvc.perform(get("/user-vocabularies/search")
-                        .principal(() -> "user-1")
+                        .principal(new TestingAuthenticationToken("user-1", null))
                         .param("text", "app"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(2000))
@@ -80,41 +82,50 @@ class UserVocabularySearchControllerTest {
                 .andExpect(jsonPath("$.result.content[0].word.senses[0].shortMeaning").value("a fruit"));
 
         verify(userVocabularyService)
-                .searchUserVocabulary("user-1", "app", false, 0, 20);
+                .searchUserVocabulary("user-1", "app", 0, 20);
     }
 
     @Test
     void delegatesExplicitAutocompleteAndPaginationParameters() throws Exception {
-        when(userVocabularyService.searchUserVocabulary(
-                "user-1", "app", true, 2, 5
-        )).thenReturn(new PageImpl<>(List.of(), PageRequest.of(2, 5), 0));
+        UserVocabularyAutocompleteResponse suggestion = UserVocabularyAutocompleteResponse.builder()
+                .userVocabId("saved-1").word("Apple").level(2).pos("noun").build();
+        when(userVocabularyService.autocompleteUserVocabulary(
+                "user-1", "app", 2, 5
+        )).thenReturn(new PageImpl<>(List.of(suggestion), PageRequest.of(2, 5), 11));
 
         mockMvc.perform(get("/user-vocabularies/search")
-                        .principal(() -> "user-1")
+                        .principal(new TestingAuthenticationToken("user-1", null))
                         .param("text", "app")
                         .param("isAutocomplete", "true")
                         .param("page", "2")
                         .param("limit", "5"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.result.content.length()").value(0));
+                .andExpect(jsonPath("$.result.content.length()").value(1))
+                .andExpect(jsonPath("$.result.content[0].length()").value(4))
+                .andExpect(jsonPath("$.result.content[0].userVocabId").value("saved-1"))
+                .andExpect(jsonPath("$.result.content[0].word").value("Apple"))
+                .andExpect(jsonPath("$.result.content[0].level").value(2))
+                .andExpect(jsonPath("$.result.content[0].pos").value("noun"))
+                .andExpect(jsonPath("$.result.totalElements").value(11))
+                .andExpect(jsonPath("$.result.number").value(2));
 
         verify(userVocabularyService)
-                .searchUserVocabulary("user-1", "app", true, 2, 5);
+                .autocompleteUserVocabulary("user-1", "app", 2, 5);
     }
 
     @Test
     void derivesUserIdFromAuthenticatedPrincipal() throws Exception {
         when(userVocabularyService.searchUserVocabulary(
-                "authenticated-user", "app", false, 0, 20
+                "authenticated-user", "app", 0, 20
         )).thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
 
         mockMvc.perform(get("/user-vocabularies/search")
-                        .principal(() -> "authenticated-user")
+                        .principal(new TestingAuthenticationToken("authenticated-user", null))
                         .param("userId", "another-user")
                         .param("text", "app"))
                 .andExpect(status().isOk());
 
         verify(userVocabularyService)
-                .searchUserVocabulary("authenticated-user", "app", false, 0, 20);
+                .searchUserVocabulary("authenticated-user", "app", 0, 20);
     }
 }

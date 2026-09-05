@@ -2,6 +2,7 @@ package com.bachdauduc.vocab_app.repository;
 
 import com.bachdauduc.vocab_app.entity.UserVocabulary;
 import com.bachdauduc.vocab_app.repository.projection.UserVocabularyProjection;
+import com.bachdauduc.vocab_app.repository.projection.UserVocabularyAutocompleteProjection;
 import com.bachdauduc.vocab_app.repository.projection.UserVocabularyLevelQuantityProjection;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -96,17 +97,10 @@ public interface UserVocabularyRepository extends JpaRepository<UserVocabulary, 
     @Query(
             value = """
                     SELECT
-                        uv.id AS id,
-                        uv.user_id AS userId,
-                        uv.word_id AS wordId,
+                        uv.id AS userVocabId,
                         w.word AS word,
-                        uv.sense_id AS senseId,
-                        uv.sense_localized_id AS senseLocalizedId,
                         uv.level AS level,
-                        uv.current_level_correct_turns AS currentLevelCorrectTurns,
-                        uv.next_review_at AS nextReviewAt,
-                        uv.created_at AS createdAt,
-                        uv.updated_at AS updatedAt
+                        w.pos AS pos
                     FROM user_vocabularies uv
                     JOIN words w ON uv.word_id = w.id
                     WHERE uv.user_id = :userId
@@ -122,7 +116,7 @@ public interface UserVocabularyRepository extends JpaRepository<UserVocabulary, 
                     """,
             nativeQuery = true
     )
-    Page<UserVocabularyProjection> findUserVocabByNormalizedWordPrefix(
+    Page<UserVocabularyAutocompleteProjection> findUserVocabByNormalizedWordPrefix(
             @Param("userId") String userId,
             @Param("normalizedPrefix") String normalizedPrefix,
             Pageable pageable

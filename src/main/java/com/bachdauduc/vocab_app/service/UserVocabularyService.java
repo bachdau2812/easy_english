@@ -9,6 +9,7 @@ import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserSearchHistoryRes
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabAttemptResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularySearchResponse;
+import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyAutocompleteResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyStatisticResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyInfoResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyLevelQuantityResponse;
@@ -220,14 +221,12 @@ public class UserVocabularyService {
     public Page<UserVocabularySearchResponse> searchUserVocabulary(
             String userId,
             String text,
-            boolean isAutocomplete,
             int page,
             int limit
     ) {
         log.debug(
-                "Start service: method=searchUserVocabulary, userId={}, isAutocomplete={}, page={}, limit={}",
+                "Start service: method=searchUserVocabulary, userId={}, page={}, limit={}",
                 userId,
-                isAutocomplete,
                 page,
                 limit
         );
@@ -239,13 +238,7 @@ public class UserVocabularyService {
         }
 
         String normalizedText = text.trim().toLowerCase(Locale.ROOT);
-        Page<UserVocabularyProjection> matches = isAutocomplete
-                ? userVocabularyRepository.findUserVocabByNormalizedWordPrefix(
-                        userId,
-                        normalizedText,
-                        pageable
-                )
-                : userVocabularyRepository.findUserVocabByNormalizedWord(
+        Page<UserVocabularyProjection> matches = userVocabularyRepository.findUserVocabByNormalizedWord(
                         userId,
                         normalizedText,
                         pageable
@@ -254,14 +247,35 @@ public class UserVocabularyService {
         Page<UserVocabularySearchResponse> response =
                 matches.map(this::toUserVocabularySearchResponse);
         log.info(
-                "Saved vocabularies searched: userId={}, normalizedText={}, isAutocomplete={}, resultCount={}, totalElements={}",
+                "Saved vocabularies searched: userId={}, normalizedText={}, resultCount={}, totalElements={}",
                 userId,
                 normalizedText,
-                isAutocomplete,
                 response.getNumberOfElements(),
                 response.getTotalElements()
         );
         return response;
+    }
+
+    public Page<UserVocabularyAutocompleteResponse> autocompleteUserVocabulary(
+            String userId,
+            String text,
+            int page,
+            int limit
+    ) {
+        assertUserExists(userId);
+        PageRequest pageable = pageRequest(page, limit);
+        if (!StringUtils.hasText(text)) {
+            return Page.empty(pageable);
+        }
+
+        String normalizedText = text.trim().toLowerCase(Locale.ROOT);
+        return userVocabularyRepository.findUserVocabByNormalizedWordPrefix(userId, normalizedText, pageable)
+                .map(match -> UserVocabularyAutocompleteResponse.builder()
+                        .userVocabId(match.getUserVocabId())
+                        .word(match.getWord())
+                        .level(match.getLevel())
+                        .pos(match.getPos())
+                        .build());
     }
 
     @Transactional(readOnly = true)
@@ -401,12 +415,16 @@ public class UserVocabularyService {
             wordResponse = filterSensesByLocalization(wordResponse, senseLocalizedId, localization.getSenseId());
         } else {
             log.debug(
-                    "Load user vocab word by sense: userVocabId={}, wordId={}, senseId={}",
+                    " : userVocabId={}, wordId={}, senseId={}",
                     userVocabId,
                     wordId,
                     senseId
             );
-            wordResponse = getWordDataService.getWord(wordId, false, null);
+            boolean hasVietnameseTranslation = wordSenseLocalizationRepository
+                    .findFirstBySenseIdAndLangCode(senseId, "vi")
+                    .isPresent();
+            wordResponse = getWordDataService.getWord(
+                    wordId, hasVietnameseTranslation, hasVietnameseTranslation ? "vi" : null);
             wordResponse = filterSensesBySense(wordResponse, senseId);
         }
 

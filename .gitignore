@@ -36,3 +36,5 @@ logs/
 docs/
 .worktrees/
 .superpowers/
+outputs/
+./bussiness_rule.md

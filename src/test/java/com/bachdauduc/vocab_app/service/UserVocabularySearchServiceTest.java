@@ -1,6 +1,7 @@
 package com.bachdauduc.vocab_app.service;
 
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularySearchResponse;
+import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyAutocompleteResponse;
 import com.bachdauduc.vocab_app.dto.response.worddata.WordResponse;
 import com.bachdauduc.vocab_app.dto.response.worddata.WordSenseResponse;
 import com.bachdauduc.vocab_app.entity.WordSenseLocalization;
@@ -15,6 +16,7 @@ import com.bachdauduc.vocab_app.repository.WordRepository;
 import com.bachdauduc.vocab_app.repository.WordSenseLocalizationRepository;
 import com.bachdauduc.vocab_app.repository.WordSenseRepository;
 import com.bachdauduc.vocab_app.repository.projection.UserVocabularyProjection;
+import com.bachdauduc.vocab_app.repository.projection.UserVocabularyAutocompleteProjection;
 import com.bachdauduc.vocab_app.service.review.ReviewAvailabilityService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -37,6 +39,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -73,7 +76,7 @@ class UserVocabularySearchServiceTest {
         when(getWordDataService.getWord("word-1", false, null)).thenReturn(word);
 
         Page<UserVocabularySearchResponse> result =
-                service.searchUserVocabulary("user-1", " APPLE ", false, 0, 20);
+                service.searchUserVocabulary("user-1", " APPLE ", 0, 20);
 
         assertThat(result.getContent()).hasSize(1);
         UserVocabularySearchResponse item = result.getContent().getFirst();
@@ -92,19 +95,55 @@ class UserVocabularySearchServiceTest {
     }
 
     @Test
-    void autocompleteSearchUsesNormalizedPrefixQuery() {
+    void autocompleteReturnsOnlyDropdownDataWithoutLoadingWordDetails() {
         when(userInfoRepository.existsById("user-1")).thenReturn(true);
+        UserVocabularyAutocompleteProjection match = mock(UserVocabularyAutocompleteProjection.class);
+        when(match.getUserVocabId()).thenReturn("saved-1");
+        when(match.getWord()).thenReturn("Apple");
+        when(match.getLevel()).thenReturn(2);
+        when(match.getPos()).thenReturn("noun");
         when(userVocabularyRepository.findUserVocabByNormalizedWordPrefix(
                 eq("user-1"), eq("app"), any(Pageable.class)
-        )).thenReturn(Page.empty());
+        )).thenReturn(new PageImpl<>(List.of(match)));
 
-        Page<UserVocabularySearchResponse> result =
-                service.searchUserVocabulary("user-1", " App ", true, 1, 5);
+        Page<UserVocabularyAutocompleteResponse> result =
+                service.autocompleteUserVocabulary("user-1", " App ", 1, 5);
 
-        assertThat(result).isEmpty();
+        assertThat(result.getContent()).containsExactly(UserVocabularyAutocompleteResponse.builder()
+                .userVocabId("saved-1").word("Apple").level(2).pos("noun").build());
+        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+        verify(userVocabularyRepository).findUserVocabByNormalizedWordPrefix(
+                eq("user-1"), eq("app"), pageable.capture());
+        assertThat(pageable.getValue().getPageNumber()).isEqualTo(1);
+        assertThat(pageable.getValue().getPageSize()).isEqualTo(5);
+        verifyNoInteractions(getWordDataService, wordSenseLocalizationRepository, wordSenseRepository);
         verify(userVocabularyRepository, never()).findUserVocabByNormalizedWord(
                 any(), any(), any(Pageable.class)
         );
+    }
+
+    @Test
+    void standardSavedSenseSearchReturnsExistingVietnameseTranslation() {
+        when(userInfoRepository.existsById("user-1")).thenReturn(true);
+        UserVocabularyProjection saved = projection("saved-1", "word-1", "Apple", "sense-1", null);
+        when(userVocabularyRepository.findUserVocabByNormalizedWord(
+                eq("user-1"), eq("apple"), any(Pageable.class)
+        )).thenReturn(new PageImpl<>(List.of(saved)));
+        WordSenseLocalization localization = new WordSenseLocalization();
+        localization.setLangCode("vi");
+        when(wordSenseLocalizationRepository.findFirstBySenseIdAndLangCode("sense-1", "vi"))
+                .thenReturn(Optional.of(localization));
+        WordSenseResponse translated = sense("sense-1", "localization-1");
+        translated.setTrans(WordSenseResponse.Translation.builder()
+                .langCode("vi").definition("Qua tao").build());
+        when(getWordDataService.getWord("word-1", true, "vi"))
+                .thenReturn(word("word-1", translated, sense("sense-2", null)));
+
+        UserVocabularySearchResponse result = service
+                .searchUserVocabulary("user-1", "apple", 0, 20).getContent().getFirst();
+
+        assertThat(result.getWord().getSenses()).containsExactly(translated);
+        assertThat(result.getWord().getSenses().getFirst().getTrans().getDefinition()).isEqualTo("Qua tao");
     }
 
     @Test
@@ -133,7 +172,7 @@ class UserVocabularySearchServiceTest {
         when(getWordDataService.getWord("word-1", true, "vi")).thenReturn(word);
 
         UserVocabularySearchResponse item =
-                service.searchUserVocabulary("user-1", "apple", false, 0, 20)
+                service.searchUserVocabulary("user-1", "apple", 0, 20)
                         .getContent()
                         .getFirst();
 
@@ -146,8 +185,8 @@ class UserVocabularySearchServiceTest {
     void blankTextReturnsEmptyPageAfterValidatingUser() {
         when(userInfoRepository.existsById("user-1")).thenReturn(true);
 
-        Page<UserVocabularySearchResponse> result =
-                service.searchUserVocabulary("user-1", "   ", true, -1, 0);
+        Page<UserVocabularyAutocompleteResponse> result =
+                service.autocompleteUserVocabulary("user-1", "   ", -1, 0);
 
         assertThat(result).isEmpty();
         assertThat(result.getPageable().getPageNumber()).isZero();
@@ -163,13 +202,21 @@ class UserVocabularySearchServiceTest {
         when(userInfoRepository.existsById("missing")).thenReturn(false);
 
         assertThatThrownBy(() ->
-                service.searchUserVocabulary("missing", "apple", false, 0, 20)
+                service.searchUserVocabulary("missing", "apple", 0, 20)
         ).isInstanceOfSatisfying(AppException.class, exception ->
                 assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.USER_NOT_FOUND));
 
         verify(userVocabularyRepository, never()).findUserVocabByNormalizedWord(
                 any(), any(), any(Pageable.class)
         );
+    }
+
+    @Test
+    void autocompleteRejectsMissingUserBeforeQueryingSavedWords() {
+        assertThatThrownBy(() -> service.autocompleteUserVocabulary("missing", "app", 0, 20))
+                .isInstanceOfSatisfying(AppException.class, exception ->
+                        assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.USER_NOT_FOUND));
+        verifyNoInteractions(userVocabularyRepository, getWordDataService);
     }
 
     private UserVocabularyProjection projection(

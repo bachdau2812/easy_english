@@ -1,6 +1,7 @@
 package com.bachdauduc.vocab_app.repository;
 
 import com.bachdauduc.vocab_app.repository.projection.UserVocabularyProjection;
+import com.bachdauduc.vocab_app.repository.projection.UserVocabularyAutocompleteProjection;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -67,12 +68,12 @@ class UserVocabularySearchRepositoryTest {
 
     @Test
     void prefixSearchIsUserScopedAndKeepsPaginationMetadata() {
-        Page<UserVocabularyProjection> firstPage = repository.findUserVocabByNormalizedWordPrefix(
+        Page<UserVocabularyAutocompleteProjection> firstPage = repository.findUserVocabByNormalizedWordPrefix(
                 "user-1",
                 "app",
                 PageRequest.of(0, 2)
         );
-        Page<UserVocabularyProjection> secondPage = repository.findUserVocabByNormalizedWordPrefix(
+        Page<UserVocabularyAutocompleteProjection> secondPage = repository.findUserVocabByNormalizedWordPrefix(
                 "user-1",
                 "app",
                 PageRequest.of(1, 2)
@@ -81,10 +82,14 @@ class UserVocabularySearchRepositoryTest {
         assertThat(firstPage.getTotalElements()).isEqualTo(3);
         assertThat(firstPage.getTotalPages()).isEqualTo(2);
         assertThat(firstPage.getContent())
-                .extracting(UserVocabularyProjection::getId)
-                .containsExactly("saved-new", "saved-old");
+                .extracting(UserVocabularyAutocompleteProjection::getUserVocabId,
+                        UserVocabularyAutocompleteProjection::getWord,
+                        UserVocabularyAutocompleteProjection::getLevel,
+                        UserVocabularyAutocompleteProjection::getPos)
+                .containsExactly(tuple("saved-new", "Apple", 1, "noun"),
+                        tuple("saved-old", "Apple", 1, "noun"));
         assertThat(secondPage.getContent())
-                .extracting(UserVocabularyProjection::getId)
+                .extracting(UserVocabularyAutocompleteProjection::getUserVocabId)
                 .containsExactly("saved-application");
     }
 
