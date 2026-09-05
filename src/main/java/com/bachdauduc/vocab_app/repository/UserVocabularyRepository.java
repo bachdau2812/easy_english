@@ -28,16 +28,13 @@ public interface UserVocabularyRepository extends JpaRepository<UserVocabulary, 
     @Query(value = """
             SELECT w.word AS word, w.pos AS pos, uv.level AS level,
                 COALESCE(
-                    CASE WHEN saved.lang_code = :langCode THEN NULLIF(TRIM(saved.short_meaning), '') END,
                     CASE WHEN saved.lang_code = :langCode
                          THEN NULLIF(TRIM(saved.full_localized_definition), '') END,
-                    (SELECT COALESCE(NULLIF(TRIM(trans.short_meaning), ''),
-                                     NULLIF(TRIM(trans.full_localized_definition), ''))
+                    (SELECT NULLIF(TRIM(trans.full_localized_definition), '')
                      FROM word_sense_localizations trans
                      WHERE trans.sense_id = ws.id AND trans.word_id = w.id
                          AND trans.lang_code = :langCode
-                         AND (NULLIF(TRIM(trans.short_meaning), '') IS NOT NULL
-                              OR NULLIF(TRIM(trans.full_localized_definition), '') IS NOT NULL)
+                         AND NULLIF(TRIM(trans.full_localized_definition), '') IS NOT NULL
                      ORDER BY trans.id ASC
                      LIMIT 1),
                     ws.definition, ''

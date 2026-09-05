@@ -30,12 +30,12 @@ class UserVocabularyExportRepositoryTest {
         sense("sense-2", "A company");
         sense("sense-3", "A full definition");
         sense("sense-4", "English fallback");
-        localization("loc-1", "sense-1", "vi", "quả táo", null);
-        localization("loc-2", "sense-1", "vi", "bản dịch thứ hai", null);
-        localization("loc-fr", "sense-1", "fr", "pomme", null);
-        localization("loc-saved", null, "vi", "nghĩa riêng", null);
+        localization("loc-1", "sense-1", "vi", "quả táo", "Một loại quả có vỏ đỏ hoặc xanh.");
+        localization("loc-2", "sense-1", "vi", "bản dịch thứ hai", "Định nghĩa đầy đủ thứ hai.");
+        localization("loc-fr", "sense-1", "fr", "pomme", "Le fruit du pommier.");
+        localization("loc-saved", null, "vi", "nghĩa riêng", "Định nghĩa riêng đầy đủ.");
         localization("loc-full", "sense-3", "vi", "   ", "định nghĩa đầy đủ");
-        localization("loc-empty", "sense-4", "vi", "", "   ");
+        localization("loc-empty", "sense-4", "vi", "Chỉ có nghĩa ngắn", "   ");
         vocabulary("saved-1", "user-1", "sense-1", null, 1);
         vocabulary("saved-2", "user-1", "sense-2", null, 2);
         vocabulary("saved-3", "user-1", null, "loc-saved", 3);
@@ -49,7 +49,8 @@ class UserVocabularyExportRepositoryTest {
     void resolvesVietnameseThenEnglishWithoutDuplicatingRowsOrLeakingOtherUsers() {
         var result = repository.findUserVocabularyForExport("user-1", "vi", PageRequest.of(0, 500));
         assertThat(result.getContent()).extracting(UserVocabularyExportProjection::getWordSense)
-                .containsExactly("quả táo", "A company", "nghĩa riêng", "định nghĩa đầy đủ", "English fallback", "quả táo");
+                .containsExactly("Một loại quả có vỏ đỏ hoặc xanh.", "A company", "Định nghĩa riêng đầy đủ.",
+                        "định nghĩa đầy đủ", "English fallback", "Một loại quả có vỏ đỏ hoặc xanh.");
         assertThat(result.getContent()).extracting(UserVocabularyExportProjection::getLevel)
                 .containsExactly(1, 2, 3, 4, 5, 6);
         assertThat(result.getContent()).allSatisfy(row -> {
@@ -65,17 +66,29 @@ class UserVocabularyExportRepositoryTest {
         var last = repository.findUserVocabularyForExport("user-1", "fr", PageRequest.of(2, 2));
         assertThat(first.hasNext()).isTrue();
         assertThat(first.getContent()).extracting(UserVocabularyExportProjection::getWordSense)
-                .containsExactly("pomme", "A company");
+                .containsExactly("Le fruit du pommier.", "A company");
         assertThat(last.hasNext()).isFalse();
         assertThat(last.getContent()).extracting(UserVocabularyExportProjection::getWordSense)
-                .containsExactly("English fallback", "pomme");
+                .containsExactly("English fallback", "Le fruit du pommier.");
     }
 
     @Test
     void preservesExplicitSavedLocalizationInsteadOfChoosingAnotherTranslation() {
         vocabulary("saved-7", "user-1", null, "loc-2", 1);
         var result = repository.findUserVocabularyForExport("user-1", "vi", PageRequest.of(0, 500));
-        assertThat(result.getContent().getLast().getWordSense()).isEqualTo("bản dịch thứ hai");
+        assertThat(result.getContent().getLast().getWordSense()).isEqualTo("Định nghĩa đầy đủ thứ hai.");
+    }
+
+    @Test
+    void skipsShortOnlyTranslationsAndLeavesMissingFullDefinitionEmpty() {
+        localization("loc-0", "sense-1", "vi", "Nghĩa ngắn không được xuất", null);
+        localization("loc-short-only", null, "vi", "Nghĩa ngắn riêng", null);
+        vocabulary("saved-7", "user-1", null, "loc-short-only", 1);
+
+        var result = repository.findUserVocabularyForExport("user-1", "vi", PageRequest.of(0, 500));
+
+        assertThat(result.getContent().getFirst().getWordSense()).isEqualTo("Một loại quả có vỏ đỏ hoặc xanh.");
+        assertThat(result.getContent().getLast().getWordSense()).isEmpty();
     }
 
     private void sense(String id, String definition) {
