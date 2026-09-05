@@ -8,6 +8,7 @@ import com.bachdauduc.vocab_app.dto.request.uservocabulary.UserVocabularyRequest
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserSearchHistoryResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabAttemptResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyResponse;
+import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularySearchResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyStatisticResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyInfoResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyLevelQuantityResponse;
@@ -216,6 +217,53 @@ public class UserVocabularyService {
         return response;
     }
 
+    public Page<UserVocabularySearchResponse> searchUserVocabulary(
+            String userId,
+            String text,
+            boolean isAutocomplete,
+            int page,
+            int limit
+    ) {
+        log.debug(
+                "Start service: method=searchUserVocabulary, userId={}, isAutocomplete={}, page={}, limit={}",
+                userId,
+                isAutocomplete,
+                page,
+                limit
+        );
+        assertUserExists(userId);
+        PageRequest pageable = pageRequest(page, limit);
+        if (!StringUtils.hasText(text)) {
+            log.info("Saved vocabulary search skipped: userId={}, reason=blank_text", userId);
+            return Page.empty(pageable);
+        }
+
+        String normalizedText = text.trim().toLowerCase(Locale.ROOT);
+        Page<UserVocabularyProjection> matches = isAutocomplete
+                ? userVocabularyRepository.findUserVocabByNormalizedWordPrefix(
+                        userId,
+                        normalizedText,
+                        pageable
+                )
+                : userVocabularyRepository.findUserVocabByNormalizedWord(
+                        userId,
+                        normalizedText,
+                        pageable
+                );
+
+        Page<UserVocabularySearchResponse> response =
+                matches.map(this::toUserVocabularySearchResponse);
+        log.info(
+                "Saved vocabularies searched: userId={}, normalizedText={}, isAutocomplete={}, resultCount={}, totalElements={}",
+                userId,
+                normalizedText,
+                isAutocomplete,
+                response.getNumberOfElements(),
+                response.getTotalElements()
+        );
+        return response;
+    }
+
     @Transactional(readOnly = true)
     public UserVocabularyInfoResponse getUserVocabularyInfo(String userId, String infoType) {
         log.debug("Start service: method=getUserVocabularyInfo, userId={}, infoType={}", userId, infoType);
@@ -324,24 +372,50 @@ public class UserVocabularyService {
     public WordResponse getUserVocabWord(String userVocabId) {
         log.debug("Start service: method=getUserVocabWord, userVocabId={}", userVocabId);
         UserVocabulary userVocabulary = getRequiredUserVocabulary(userVocabId);
+        return loadSavedWord(
+                userVocabulary.getId(),
+                userVocabulary.getWordId(),
+                userVocabulary.getSenseId(),
+                userVocabulary.getSenseLocalizedId()
+        );
+    }
 
+    private WordResponse loadSavedWord(
+            String userVocabId,
+            String wordId,
+            String senseId,
+            String senseLocalizedId
+    ) {
         WordResponse wordResponse;
-        if (StringUtils.hasText(userVocabulary.getSenseLocalizedId())) {
-            WordSenseLocalization localization = wordSenseLocalizationRepository.findById(userVocabulary.getSenseLocalizedId())
+        if (StringUtils.hasText(senseLocalizedId)) {
+            WordSenseLocalization localization = wordSenseLocalizationRepository.findById(senseLocalizedId)
                     .orElseThrow(() -> new AppException(ErrorCode.WORD_NOT_FOUND));
-            log.debug("Load user vocab word by localized sense: userVocabId={}, wordId={}, localizationId={}, langCode={}",
-                    userVocabId, userVocabulary.getWordId(), userVocabulary.getSenseLocalizedId(), localization.getLangCode());
-            wordResponse = getWordDataService.getWord(userVocabulary.getWordId(), true, localization.getLangCode());
-            filterSensesByLocalization(wordResponse, userVocabulary.getSenseLocalizedId(), localization.getSenseId());
+            log.debug(
+                    "Load user vocab word by localized sense: userVocabId={}, wordId={}, localizationId={}, langCode={}",
+                    userVocabId,
+                    wordId,
+                    senseLocalizedId,
+                    localization.getLangCode()
+            );
+            wordResponse = getWordDataService.getWord(wordId, true, localization.getLangCode());
+            filterSensesByLocalization(wordResponse, senseLocalizedId, localization.getSenseId());
         } else {
-            log.debug("Load user vocab word by sense: userVocabId={}, wordId={}, senseId={}",
-                    userVocabId, userVocabulary.getWordId(), userVocabulary.getSenseId());
-            wordResponse = getWordDataService.getWord(userVocabulary.getWordId(), false, null);
-            filterSensesBySense(wordResponse, userVocabulary.getSenseId());
+            log.debug(
+                    "Load user vocab word by sense: userVocabId={}, wordId={}, senseId={}",
+                    userVocabId,
+                    wordId,
+                    senseId
+            );
+            wordResponse = getWordDataService.getWord(wordId, false, null);
+            filterSensesBySense(wordResponse, senseId);
         }
 
-        log.info("User vocab word loaded: userVocabId={}, wordId={}, filteredSenseCount={}",
-                userVocabId, userVocabulary.getWordId(), wordResponse.getSenses().size());
+        log.info(
+                "User vocab word loaded: userVocabId={}, wordId={}, filteredSenseCount={}",
+                userVocabId,
+                wordId,
+                wordResponse.getSenses().size()
+        );
         return wordResponse;
     }
 
@@ -613,6 +687,20 @@ public class UserVocabularyService {
         if (!wordRepository.existsById(wordId)) {
             throw new AppException(ErrorCode.WORD_NOT_FOUND);
         }
+    }
+
+    private UserVocabularySearchResponse toUserVocabularySearchResponse(
+            UserVocabularyProjection projection
+    ) {
+        return UserVocabularySearchResponse.builder()
+                .userVocabulary(toUserVocabularyResponse(projection))
+                .word(loadSavedWord(
+                        projection.getId(),
+                        projection.getWordId(),
+                        projection.getSenseId(),
+                        projection.getSenseLocalizedId()
+                ))
+                .build();
     }
 
     private UserVocabularyResponse toUserVocabularyResponse(UserVocabulary userVocabulary) {
