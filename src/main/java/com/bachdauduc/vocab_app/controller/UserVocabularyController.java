@@ -8,6 +8,7 @@ import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserSearchHistoryRes
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabAttemptResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyInfoResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyResponse;
+import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularySearchResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyStatisticResponse;
 import com.bachdauduc.vocab_app.dto.response.worddata.WordResponse;
 import com.bachdauduc.vocab_app.service.UserVocabularyService;
@@ -60,6 +61,33 @@ public class UserVocabularyController {
         log.info("Request received: action=insertUserHistory, userId={}, wordId={}",
                 request.getUserId(), request.getWordId());
         return success("User search history saved", userVocabularyService.insertUserHistory(request));
+    }
+
+    @GetMapping("/search")
+    public ApiResponse<Page<UserVocabularySearchResponse>> searchUserVocabulary(
+            @RequestParam String userId,
+            @RequestParam String text,
+            @RequestParam(defaultValue = "false") boolean isAutocomplete,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int limit
+    ) {
+        log.info(
+                "Request received: action=searchUserVocabulary, userId={}, isAutocomplete={}, page={}, limit={}",
+                userId,
+                isAutocomplete,
+                page,
+                limit
+        );
+        return success(
+                "Search user vocabularies successfully",
+                userVocabularyService.searchUserVocabulary(
+                        userId,
+                        text,
+                        isAutocomplete,
+                        page,
+                        limit
+                )
+        );
     }
 
     @GetMapping("/search-history")
