@@ -398,7 +398,7 @@ public class UserVocabularyService {
                     localization.getLangCode()
             );
             wordResponse = getWordDataService.getWord(wordId, true, localization.getLangCode());
-            filterSensesByLocalization(wordResponse, senseLocalizedId, localization.getSenseId());
+            wordResponse = filterSensesByLocalization(wordResponse, senseLocalizedId, localization.getSenseId());
         } else {
             log.debug(
                     "Load user vocab word by sense: userVocabId={}, wordId={}, senseId={}",
@@ -407,7 +407,7 @@ public class UserVocabularyService {
                     senseId
             );
             wordResponse = getWordDataService.getWord(wordId, false, null);
-            filterSensesBySense(wordResponse, senseId);
+            wordResponse = filterSensesBySense(wordResponse, senseId);
         }
 
         log.info(
@@ -600,19 +600,19 @@ public class UserVocabularyService {
         };
     }
 
-    private void filterSensesBySense(WordResponse wordResponse, String senseId) {
+    private WordResponse filterSensesBySense(WordResponse wordResponse, String senseId) {
         List<WordSenseResponse> senses = wordResponse.getSenses().stream()
                 .filter(sense -> senseId.equals(sense.getSenseId()))
                 .toList();
         if (senses.isEmpty()) {
             throw new AppException(ErrorCode.WORD_NOT_FOUND);
         }
-        wordResponse.setSenses(senses);
         log.debug("Filtered word senses by senseId: wordId={}, senseId={}, resultCount={}",
                 wordResponse.getWordId(), senseId, senses.size());
+        return copyWordResponseWithSenses(wordResponse, senses);
     }
 
-    private void filterSensesByLocalization(WordResponse wordResponse, String localizationId, String senseId) {
+    private WordResponse filterSensesByLocalization(WordResponse wordResponse, String localizationId, String senseId) {
         List<WordSenseResponse> senses = wordResponse.getSenses().stream()
                 .filter(sense -> localizationId.equals(sense.getLocalizationId())
                         || (StringUtils.hasText(senseId) && senseId.equals(sense.getSenseId())))
@@ -620,9 +620,32 @@ public class UserVocabularyService {
         if (senses.isEmpty()) {
             throw new AppException(ErrorCode.WORD_NOT_FOUND);
         }
-        wordResponse.setSenses(senses);
         log.debug("Filtered word senses by localization: wordId={}, localizationId={}, senseId={}, resultCount={}",
                 wordResponse.getWordId(), localizationId, senseId, senses.size());
+        return copyWordResponseWithSenses(wordResponse, senses);
+    }
+
+    private WordResponse copyWordResponseWithSenses(
+            WordResponse source,
+            List<WordSenseResponse> senses
+    ) {
+        return WordResponse.builder()
+                .wordId(source.getWordId())
+                .word(source.getWord())
+                .normalizedWord(source.getNormalizedWord())
+                .pos(source.getPos())
+                .certLevel(source.getCertLevel())
+                .lang(source.getLang())
+                .langCode(source.getLangCode())
+                .wordSource(source.getWordSource())
+                .otherSource(source.getOtherSource())
+                .categories(source.getCategories())
+                .sounds(source.getSounds())
+                .senses(senses)
+                .idioms(source.getIdioms())
+                .forms(source.getForms())
+                .relation(source.getRelation())
+                .build();
     }
 
     private UserVocabularyStatisticResponse buildStatisticResponse(

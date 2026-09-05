@@ -83,8 +83,8 @@ public class RedisKeyProperties {
         return userInfoPattern.formatted(userId);
     }
 
-    public String wordWithTransKey(String wordId) {
-        return wordWithTransPattern.formatted(wordId);
+    public String wordWithTransKey(String wordId, String transLangCode) {
+        return wordWithTransPattern.formatted(wordId, transLangCode);
     }
 
     public String wordWithoutTransKey(String wordId) {

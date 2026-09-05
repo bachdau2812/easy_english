@@ -9,17 +9,17 @@ Add a paginated API that searches only a user's saved vocabulary and returns eac
 The controller exposes:
 
 ```http
-GET /user-vocabularies/search?userId={userId}&text={text}&isAutocomplete={boolean}&page={page}&limit={limit}
+GET /user-vocabularies/search?text={text}&isAutocomplete={boolean}&page={page}&limit={limit}
 ```
 
-- `userId` and `text` are required request parameters.
+- `text` is required. The user ID is derived from the authenticated JWT subject and is not accepted from query parameters.
 - `isAutocomplete` defaults to `false`.
 - `page` defaults to `0` and negative values are normalized to `0` through the existing page helper.
 - `limit` defaults to `20` and values below `1` are normalized to `1` through the existing page helper.
 - When `isAutocomplete=false`, `text` is trimmed, lowercased, and matched exactly against `words.normalized_word`.
 - When `isAutocomplete=true`, the normalized text is matched as a prefix against `words.normalized_word`.
 - Blank search text produces an empty page after validating that the user exists.
-- Results are restricted to saved vocabulary rows owned by `userId`.
+- Results are restricted to saved vocabulary rows owned by the authenticated user.
 
 The response uses the existing `ApiResponse<T>` envelope with a `Page<UserVocabularySearchResponse>` result. Each item has this shape:
 
@@ -59,7 +59,7 @@ The response uses the existing `ApiResponse<T>` envelope with a `Page<UserVocabu
 
 ## Components and Data Flow
 
-`UserVocabularyController` accepts the request parameters and delegates to `UserVocabularyService`.
+`UserVocabularyController` obtains the user ID from the authenticated principal, accepts the search parameters, and delegates to `UserVocabularyService`.
 
 `UserVocabularyRepository` adds two paginated native queries. Both join `user_vocabularies` to `words`, filter by `user_id`, and return `UserVocabularyProjection` so the saved record includes the display word. One query performs exact matching; the other performs prefix matching. Results are ordered deterministically by normalized word, display word, newest saved record, and saved vocabulary ID.
 

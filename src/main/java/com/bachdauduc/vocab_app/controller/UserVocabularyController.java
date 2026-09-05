@@ -20,6 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.data.domain.Page;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -65,12 +66,13 @@ public class UserVocabularyController {
 
     @GetMapping("/search")
     public ApiResponse<Page<UserVocabularySearchResponse>> searchUserVocabulary(
-            @RequestParam String userId,
+            Authentication authentication,
             @RequestParam String text,
             @RequestParam(defaultValue = "false") boolean isAutocomplete,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int limit
     ) {
+        String userId = authentication.getName();
         log.info(
                 "Request received: action=searchUserVocabulary, userId={}, isAutocomplete={}, page={}, limit={}",
                 userId,

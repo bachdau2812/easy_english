@@ -350,7 +350,7 @@ public class GetWordDataService {
     }
 
     private WordResponse getWordResponseWithCache(String wordId, boolean isTrans, String transLangCode) {
-        String cacheKey = wordCacheKey(wordId, isTrans);
+        String cacheKey = wordCacheKey(wordId, isTrans, transLangCode);
         log.info("Word cache lookup: wordId={}, isTrans={}, transLangCode={}, key={}",
                 wordId, isTrans, transLangCode, cacheKey);
         String cachedWord = redisTemplate.opsForValue().get(cacheKey);
@@ -372,10 +372,16 @@ public class GetWordDataService {
         return response;
     }
 
-    private String wordCacheKey(String wordId, boolean isTrans) {
+    private String wordCacheKey(String wordId, boolean isTrans, String transLangCode) {
         return isTrans
-                ? redisKeyProperties.wordWithTransKey(wordId)
+                ? redisKeyProperties.wordWithTransKey(wordId, normalizedTranslationLanguage(transLangCode))
                 : redisKeyProperties.wordWithoutTransKey(wordId);
+    }
+
+    private String normalizedTranslationLanguage(String transLangCode) {
+        return StringUtils.hasText(transLangCode)
+                ? normalizeSearchText(transLangCode)
+                : "default";
     }
 
     private List<Word> findMatchedWordsByText(String text) {

@@ -66,7 +66,7 @@ class UserVocabularySearchControllerTest {
         ));
 
         mockMvc.perform(get("/user-vocabularies/search")
-                        .param("userId", "user-1")
+                        .principal(() -> "user-1")
                         .param("text", "app"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(2000))
@@ -90,7 +90,7 @@ class UserVocabularySearchControllerTest {
         )).thenReturn(new PageImpl<>(List.of(), PageRequest.of(2, 5), 0));
 
         mockMvc.perform(get("/user-vocabularies/search")
-                        .param("userId", "user-1")
+                        .principal(() -> "user-1")
                         .param("text", "app")
                         .param("isAutocomplete", "true")
                         .param("page", "2")
@@ -100,5 +100,21 @@ class UserVocabularySearchControllerTest {
 
         verify(userVocabularyService)
                 .searchUserVocabulary("user-1", "app", true, 2, 5);
+    }
+
+    @Test
+    void derivesUserIdFromAuthenticatedPrincipal() throws Exception {
+        when(userVocabularyService.searchUserVocabulary(
+                "authenticated-user", "app", false, 0, 20
+        )).thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
+
+        mockMvc.perform(get("/user-vocabularies/search")
+                        .principal(() -> "authenticated-user")
+                        .param("userId", "another-user")
+                        .param("text", "app"))
+                .andExpect(status().isOk());
+
+        verify(userVocabularyService)
+                .searchUserVocabulary("authenticated-user", "app", false, 0, 20);
     }
 }
