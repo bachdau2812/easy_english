@@ -18,7 +18,8 @@ public interface ListenAndTypeExerciseChallengeRepository extends JpaRepository<
     @Transactional
     @Query("""
             UPDATE ListenAndTypeExerciseChallenge c SET c.translate = :translation
-            WHERE c.id = :id AND c.content = :content
+            WHERE c.id = :id
+                AND (c.content = :content OR (c.content IS NULL AND :content IS NULL))
                 AND (c.translate IS NULL OR TRIM(c.translate) = '')
             """)
     int saveTranslationIfMissing(

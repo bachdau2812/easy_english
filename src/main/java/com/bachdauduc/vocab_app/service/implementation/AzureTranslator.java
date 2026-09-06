@@ -47,7 +47,16 @@ public class AzureTranslator implements GetTranslation {
     String region;
 
     @Override
+    public String translateHtml(String html, String transLangCode) {
+        return translate(List.of(html), transLangCode, "html").get(html);
+    }
+
+    @Override
     public Map<String, String> translate(List<String> texts, String transLangCode) {
+        return translate(texts, transLangCode, "plain");
+    }
+
+    private Map<String, String> translate(List<String> texts, String transLangCode, String textType) {
         if (CollectionUtils.isEmpty(texts)) {
             return Map.of();
         }
@@ -62,7 +71,7 @@ public class AzureTranslator implements GetTranslation {
 
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(20))
-                    .uri(URI.create(buildTranslateUri(transLangCode)))
+                    .uri(URI.create(buildTranslateUri(transLangCode, textType)))
                     .header("Ocp-Apim-Subscription-Key", apiKey)
                     .header("Ocp-Apim-Subscription-Region", region)
                     .header("Content-Type", "application/json; charset=UTF-8")
@@ -97,9 +106,9 @@ public class AzureTranslator implements GetTranslation {
         }
     }
 
-    private String buildTranslateUri(String transLangCode) {
+    private String buildTranslateUri(String transLangCode, String textType) {
         String baseEndpoint = endpoint.endsWith("/") ? endpoint.substring(0, endpoint.length() - 1) : endpoint;
         return baseEndpoint + "/translate?api-version=3.0&from=en&to="
-                + URLEncoder.encode(transLangCode, StandardCharsets.UTF_8);
+                + URLEncoder.encode(transLangCode, StandardCharsets.UTF_8) + "&textType=" + textType;
     }
 }

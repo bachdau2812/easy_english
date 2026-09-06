@@ -1,18 +1,23 @@
 package com.bachdauduc.vocab_app.service;
 
 import com.bachdauduc.vocab_app.entity.ListenAndTypeExerciseChallenge;
+import com.bachdauduc.vocab_app.entity.ListenExercise;
 import com.bachdauduc.vocab_app.exception.AppException;
 import com.bachdauduc.vocab_app.exception.ErrorCode;
 import com.bachdauduc.vocab_app.repository.ListenAndTypeExerciseChallengeRepository;
+import com.bachdauduc.vocab_app.repository.ListenExerciseRepository;
 import com.bachdauduc.vocab_app.service.abstraction.GetTranslation;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
-import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -25,123 +30,194 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class ListenAndTypeTranslationServiceTest {
     @Mock ListenAndTypeExerciseChallengeRepository repository;
+    @Mock ListenExerciseRepository lessonRepository;
     @Mock GetTranslation translator;
     @InjectMocks ListenAndTypeTranslationService service;
 
     @Test
-    void translatesEntireNewLessonOnceAndReusesSavedTranslationsOnReopen() {
-        var first = challenge("1", "Hello.", null);
-        var second = challenge("2", "Thank you.", "   ");
-        var duplicate = challenge("3", "Hello.", null);
-        List<ListenAndTypeExerciseChallenge> rows = List.of(first, second, duplicate);
+    void translatesFullDocumentOnceAndMapsRepeatedLinesByPosition() {
+        var rows = List.of(challenge(0, "Old content", null),
+                challenge(10, "Thank you.", "   "), challenge(20, "Hello.", null));
         storedRows(rows);
+        document("Hello.\nThank you.\nHello.");
         persistUpdates(rows);
-        when(translator.translate(List.of("Hello.", "Thank you."), "vi"))
-                .thenReturn(Map.of("Hello.", "Xin chào.", "Thank you.", "Cảm ơn."));
+        when(translator.translateHtml(html("Hello.", "Thank you.", "Hello."), "vi"))
+                .thenReturn(html("Xin chào.", "Cảm ơn.", "Chào lại."));
 
         assertThat(service.loadTranslatedChallenges("lesson")).extracting(ListenAndTypeExerciseChallenge::getTranslate)
-                .containsExactly("Xin chào.", "Cảm ơn.", "Xin chào.");
+                .containsExactly("Xin chào.", "Cảm ơn.", "Chào lại.");
         service.loadTranslatedChallenges("lesson");
 
-        verify(translator, times(1)).translate(List.of("Hello.", "Thank you."), "vi");
-        verify(repository, times(3)).saveTranslationIfMissing(anyString(), anyString(), anyString());
+        verify(translator, times(1)).translateHtml(anyString(), eq("vi"));
+        verify(translator, never()).translate(anyList(), anyString());
+        verify(repository).saveTranslationIfMissing("id-0", "Old content", "Xin chào.");
+        verify(repository).saveTranslationIfMissing("id-20", "Hello.", "Chào lại.");
     }
 
     @Test
-    void translatesOnlyMissingContentAndPreservesExistingValues() {
-        var existing = challenge("1", "Hello.", "Bản dịch đã duyệt");
-        var missing = challenge("2", "Thank you.", null);
-        var noContent = challenge("3", "   ", null);
-        List<ListenAndTypeExerciseChallenge> rows = List.of(existing, missing, noContent);
+    void translatesFullDocumentStoredWithLiteralEscapedNewlines() {
+        var rows = List.of(challenge(1, "Hello.", null), challenge(2, "Thank you.", null));
         storedRows(rows);
+        document("Hello.\\nThank you.");
         persistUpdates(rows);
-        when(translator.translate(List.of("Thank you."), "vi"))
-                .thenReturn(Map.of("Thank you.", "Cảm ơn."));
+        when(translator.translateHtml(html("Hello.", "Thank you."), "vi"))
+                .thenReturn(html("Xin chào.", "Cảm ơn."));
+
+        assertThat(service.loadTranslatedChallenges("lesson"))
+                .extracting(ListenAndTypeExerciseChallenge::getTranslate)
+                .containsExactly("Xin chào.", "Cảm ơn.");
+    }
+
+    @Test
+    void includesExistingTranslationsInContextButOnlyWritesMissingValues() {
+        var rows = List.of(challenge(1, "Hello.", "Bản dịch đã duyệt"), challenge(2, "Thank you.", null));
+        storedRows(rows);
+        document("Hello.\r\nThank you.\r\n");
+        persistUpdates(rows);
+        when(translator.translateHtml(html("Hello.", "Thank you."), "vi"))
+                .thenReturn(html("Xin chào.", "Cảm ơn."));
 
         assertThat(service.loadTranslatedChallenges("lesson")).extracting(ListenAndTypeExerciseChallenge::getTranslate)
-                .containsExactly("Bản dịch đã duyệt", "Cảm ơn.", null);
-        verify(repository).saveTranslationIfMissing("2", "Thank you.", "Cảm ơn.");
-        verify(repository, never()).saveTranslationIfMissing(eq("1"), any(), any());
+                .containsExactly("Bản dịch đã duyệt", "Cảm ơn.");
+        verify(repository, times(1)).saveTranslationIfMissing("id-2", "Thank you.", "Cảm ơn.");
     }
 
     @Test
-    void fullyTranslatedOrEmptyLessonDoesNotCallTranslatorOrWriteDatabase() {
+    void fullyTranslatedOrEmptyLessonDoesNotLoadDocumentOrTranslate() {
         when(repository.findByListenExerciseIdOrderByPositionAsc("lesson"))
-                .thenReturn(List.of(challenge("1", "Hello.", "Xin chào.")), List.of());
+                .thenReturn(List.of(challenge(1, "Hello.", "Xin chào.")), List.of());
         assertThat(service.loadTranslatedChallenges("lesson")).hasSize(1);
         assertThat(service.loadTranslatedChallenges("lesson")).isEmpty();
-        verifyNoInteractions(translator);
+        verifyNoInteractions(translator, lessonRepository);
         verify(repository, never()).saveTranslationIfMissing(any(), any(), any());
     }
 
     @Test
-    void savesPartialSuccessAndRetriesOnlyMissingTranslations() {
-        List<ListenAndTypeExerciseChallenge> rows = List.of(
-                challenge("1", "Hello.", null), challenge("2", "Thank you.", null));
+    void retriesWholeContextForBlankSegmentWithoutOverwritingSavedTranslation() {
+        var rows = List.of(challenge(1, "Hello.", null), challenge(2, "Thank you.", null));
         storedRows(rows);
+        document("Hello.\nThank you.");
         persistUpdates(rows);
-        when(translator.translate(List.of("Hello.", "Thank you."), "vi"))
-                .thenReturn(Map.of("Hello.", "Xin chào.", "Thank you.", " "));
-        when(translator.translate(List.of("Thank you."), "vi"))
-                .thenReturn(Map.of("Thank you.", "Cảm ơn."));
+        when(translator.translateHtml(html("Hello.", "Thank you."), "vi"))
+                .thenReturn(html("Xin chào.", " "), html("Chào.", "Cảm ơn."));
 
         assertThat(service.loadTranslatedChallenges("lesson")).extracting(ListenAndTypeExerciseChallenge::getTranslate)
                 .containsExactly("Xin chào.", null);
         assertThat(service.loadTranslatedChallenges("lesson")).extracting(ListenAndTypeExerciseChallenge::getTranslate)
                 .containsExactly("Xin chào.", "Cảm ơn.");
+        verify(repository, times(1)).saveTranslationIfMissing(eq("id-1"), any(), any());
     }
 
-    @Test
-    void splitsByTextCountAndKeepsLaterBatchesWhenOneFails() {
-        var rows = IntStream.rangeClosed(1, 101)
-                .mapToObj(i -> challenge("id-" + i, "Sentence " + i, null)).toList();
-        storedRows(rows);
-        persistUpdates(rows);
-        when(translator.translate(anyList(), eq("vi"))).thenAnswer(invocation -> {
-            List<String> texts = invocation.getArgument(0);
-            if (texts.size() == 100) {
-                throw new AppException(ErrorCode.TRANSLATION_FAILED);
-            }
-            assertThat(texts).containsExactly("Sentence 101");
-            return Map.of("Sentence 101", "Câu 101");
-        });
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {
+            "Xin chào. [[SEG_1]] Cảm ơn.",
+            "Xin chào. [[SEG_2]] Cảm ơn. [[SEG_1]]",
+            "Xin chào. [[SEG_1]] Cảm ơn. [[SEG_1]]",
+            "Xin chào. [[SEG_1]] Cảm ơn. [[SEG_2]] extra",
+            "Xin chào. [[SEG_1]] Cảm ơn. [[SEG_2]] [[SEG_3]]",
+            "Xin chào. [[SEG_1]] Cảm ơn. [[SEG_invalid]]"
+    })
+    void malformedMarkersNeverSaveAnyTranslation(String response) {
+        storedRows(List.of(challenge(1, "Hello.", null), challenge(2, "Thank you.", null)));
+        document("Hello.\nThank you.");
+        when(translator.translateHtml(anyString(), eq("vi"))).thenReturn(response);
 
-        var result = service.loadTranslatedChallenges("lesson");
+        assertThat(service.loadTranslatedChallenges("lesson")).hasSize(2);
 
-        assertThat(result.getFirst().getTranslate()).isNull();
-        assertThat(result.getLast().getTranslate()).isEqualTo("Câu 101");
-        verify(translator, times(2)).translate(anyList(), eq("vi"));
+        verify(repository, never()).saveTranslationIfMissing(any(), any(), any());
     }
 
-    @Test
-    void splitsByCharacterLimitAndSkipsOversizedIndividualContent() {
-        String first = "a".repeat(30_000);
-        String second = "b".repeat(30_000);
-        storedRows(List.of(challenge("1", first, null), challenge("2", second, null),
-                challenge("3", "c".repeat(50_001), null)));
-        when(translator.translate(List.of(first), "vi")).thenReturn(Map.of());
-        when(translator.translate(List.of(second), "vi")).thenReturn(Map.of());
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {" ", "Hello.", "Hello.\n\nThank you.", "Hello. [[SEG_1]]\nThank you."})
+    void invalidDocumentNeverCallsAzure(String source) {
+        storedRows(List.of(challenge(1, "Hello.", null), challenge(2, "Thank you.", null)));
+        document(source);
 
-        assertThat(service.loadTranslatedChallenges("lesson")).hasSize(3);
+        assertThat(service.loadTranslatedChallenges("lesson")).hasSize(2);
 
-        verify(translator, times(2)).translate(anyList(), eq("vi"));
+        verifyNoInteractions(translator);
         verify(repository, never()).saveTranslationIfMissing(any(), any(), any());
     }
 
     @Test
-    void concurrentRequestsForSameLessonReuseFirstRequestsTranslations() throws Exception {
-        var rows = List.of(challenge("1", "Hello.", null));
+    void missingLessonNeverCallsAzure() {
+        storedRows(List.of(challenge(1, "Hello.", null)));
+        assertThat(service.loadTranslatedChallenges("lesson")).hasSize(1);
+        verifyNoInteractions(translator);
+    }
+
+    @Test
+    void invalidPositionsNeverCallAzure() {
+        var first = challenge(1, "Hello.", null);
+        var second = challenge(1, "Thank you.", null);
+        storedRows(List.of(first, second));
+        document("Hello.\nThank you.");
+        service.loadTranslatedChallenges("lesson");
+        second.setPosition(null);
+        service.loadTranslatedChallenges("lesson");
+        verifyNoInteractions(translator);
+    }
+
+    @Test
+    void escapesSourceHtmlAndDecodesTranslatedHtmlWithoutPersistingTags() {
+        var rows = List.of(challenge(1, "<Don> & Sue.", null));
         storedRows(rows);
+        document("<Don> & Sue.");
+        persistUpdates(rows);
+        when(translator.translateHtml(html("&lt;Don&gt; &amp; Sue."), "vi"))
+                .thenReturn("<div><b>&lt;Don&gt; &amp; Sue.</b> <SPAN class='notranslate' translate='no'>[[SEG_1]]</SPAN></div>");
+
+        assertThat(service.loadTranslatedChallenges("lesson").getFirst().getTranslate())
+                .isEqualTo("<Don> & Sue.");
+    }
+
+    @Test
+    void moreThanOneHundredChallengesStillUseOneContextualRequest() {
+        var rows = IntStream.rangeClosed(1, 101).mapToObj(i -> challenge(i, "Sentence " + i, null)).toList();
+        storedRows(rows);
+        document(String.join("\n", rows.stream().map(ListenAndTypeExerciseChallenge::getContent).toList()));
+        when(translator.translateHtml(anyString(), eq("vi"))).thenReturn(null);
+        service.loadTranslatedChallenges("lesson");
+        verify(translator, times(1)).translateHtml(anyString(), eq("vi"));
+    }
+
+    @Test
+    void characterLimitIncludesEscapingAndMarkersAndNeverSplitsDocument() {
+        var rows = List.of(challenge(1, "a".repeat(49_990), null));
+        storedRows(rows);
+        document(rows.getFirst().getContent());
+        service.loadTranslatedChallenges("lesson");
+        verifyNoInteractions(translator);
+    }
+
+    @Test
+    void azureFailureReturnsPersistedChallengesAndCanRetry() {
+        var rows = List.of(challenge(1, "Hello.", null));
+        storedRows(rows);
+        document("Hello.");
+        persistUpdates(rows);
+        when(translator.translateHtml(anyString(), eq("vi")))
+                .thenThrow(new AppException(ErrorCode.TRANSLATION_FAILED)).thenReturn(html("Xin chào."));
+        assertThat(service.loadTranslatedChallenges("lesson").getFirst().getTranslate()).isNull();
+        assertThat(service.loadTranslatedChallenges("lesson").getFirst().getTranslate()).isEqualTo("Xin chào.");
+    }
+
+    @Test
+    void concurrentRequestsForSameLessonReuseFirstRequestsTranslations() throws Exception {
+        var rows = List.of(challenge(1, "Hello.", null));
+        storedRows(rows);
+        document("Hello.");
         persistUpdates(rows);
         CountDownLatch translating = new CountDownLatch(1);
-        CountDownLatch releaseTranslation = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
         CountDownLatch secondStarted = new CountDownLatch(1);
-        when(translator.translate(List.of("Hello."), "vi")).thenAnswer(invocation -> {
+        when(translator.translateHtml(html("Hello."), "vi")).thenAnswer(invocation -> {
             translating.countDown();
-            assertThat(releaseTranslation.await(5, TimeUnit.SECONDS)).isTrue();
-            return Map.of("Hello.", "Xin chào.");
+            assertThat(release.await(5, TimeUnit.SECONDS)).isTrue();
+            return html("Xin chào.");
         });
-
         try (var executor = Executors.newFixedThreadPool(2)) {
             var first = executor.submit(() -> service.loadTranslatedChallenges("lesson"));
             try {
@@ -151,14 +227,39 @@ class ListenAndTypeTranslationServiceTest {
                     return service.loadTranslatedChallenges("lesson");
                 });
                 assertThat(secondStarted.await(5, TimeUnit.SECONDS)).isTrue();
-                releaseTranslation.countDown();
+                release.countDown();
                 assertThat(first.get(5, TimeUnit.SECONDS).getFirst().getTranslate()).isEqualTo("Xin chào.");
                 assertThat(second.get(5, TimeUnit.SECONDS).getFirst().getTranslate()).isEqualTo("Xin chào.");
             } finally {
-                releaseTranslation.countDown();
+                release.countDown();
             }
         }
-        verify(translator, times(1)).translate(anyList(), eq("vi"));
+        verify(translator, times(1)).translateHtml(anyString(), eq("vi"));
+    }
+
+    @Test
+    void translatesDocumentLineEvenWhenChallengeContentIsNull() {
+        var rows = List.of(challenge(1, null, null));
+        storedRows(rows);
+        document("Hello.");
+        persistUpdates(rows);
+        when(translator.translateHtml(html("Hello."), "vi")).thenReturn(html("Xin chào."));
+
+        assertThat(service.loadTranslatedChallenges("lesson").getFirst().getTranslate()).isEqualTo("Xin chào.");
+        verify(repository).saveTranslationIfMissing("id-1", null, "Xin chào.");
+    }
+
+    private static String html(String... lines) {
+        return IntStream.range(0, lines.length)
+                .mapToObj(i -> lines[i] + " <span translate=\"no\">[[SEG_" + (i + 1) + "]]</span>")
+                .collect(java.util.stream.Collectors.joining(" "));
+    }
+
+    private void document(String source) {
+        var lesson = new ListenExercise();
+        lesson.setLessonId("lesson");
+        lesson.setFullDocument(source);
+        when(lessonRepository.findById("lesson")).thenReturn(Optional.of(lesson));
     }
 
     private void storedRows(List<ListenAndTypeExerciseChallenge> rows) {
@@ -166,19 +267,20 @@ class ListenAndTypeTranslationServiceTest {
     }
 
     private void persistUpdates(List<ListenAndTypeExerciseChallenge> rows) {
-        when(repository.saveTranslationIfMissing(anyString(), anyString(), anyString())).thenAnswer(invocation -> {
+        when(repository.saveTranslationIfMissing(anyString(), nullable(String.class), anyString())).thenAnswer(invocation -> {
             rows.stream().filter(row -> row.getId().equals(invocation.getArgument(0)))
                     .findFirst().orElseThrow().setTranslate(invocation.getArgument(2));
             return 1;
         });
     }
 
-    private ListenAndTypeExerciseChallenge challenge(String id, String content, String translation) {
+    private ListenAndTypeExerciseChallenge challenge(int position, String content, String translation) {
         var challenge = new ListenAndTypeExerciseChallenge();
-        challenge.setId(id);
+        challenge.setId("id-" + position);
+        challenge.setPosition(position);
         challenge.setListenExerciseId("lesson");
         challenge.setContent(content);
-        challenge.setSolution("Different answer " + id);
+        challenge.setSolution("Different answer " + position);
         challenge.setTranslate(translation);
         return challenge;
     }

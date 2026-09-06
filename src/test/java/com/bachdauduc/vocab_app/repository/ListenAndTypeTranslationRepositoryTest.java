@@ -34,6 +34,17 @@ class ListenAndTypeTranslationRepositoryTest {
         assertThat(repository.findById("challenge-blank").orElseThrow().getTranslate()).isEqualTo("Bản dịch mới");
     }
 
+    @Test
+    void savesDocumentTranslationWhenContentIsNullAndRejectsChangedContent() {
+        insertChallenge("null-content", null, null);
+        insertChallenge("changed-content", "New content", null);
+
+        assertThat(repository.saveTranslationIfMissing("null-content", null, "Document translation")).isEqualTo(1);
+        assertThat(repository.saveTranslationIfMissing("null-content", null, "Overwrite")).isZero();
+        assertThat(repository.saveTranslationIfMissing("changed-content", null, "Stale translation")).isZero();
+        assertThat(repository.findById("null-content").orElseThrow().getTranslate()).isEqualTo("Document translation");
+    }
+
     private void insertChallenge(String id, String content, String translation) {
         jdbc.update("""
                 INSERT INTO listen_and_type_exercise_challenges
