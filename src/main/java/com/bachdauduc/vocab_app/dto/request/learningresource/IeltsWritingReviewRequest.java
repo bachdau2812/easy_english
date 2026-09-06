@@ -1,6 +1,7 @@
 package com.bachdauduc.vocab_app.dto.request.learningresource;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -17,9 +18,10 @@ public class IeltsWritingReviewRequest {
     @NotBlank
     String exerciseId;
 
-    @NotBlank
+    @Deprecated
     String userId;
 
     @NotBlank
+    @Size(max = 20_000)
     String userAnswer;
 }

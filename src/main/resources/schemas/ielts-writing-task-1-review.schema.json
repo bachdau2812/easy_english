@@ -1,0 +1,339 @@
+{
+  "type": "object",
+  "properties": {
+    "criteria": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "type": "object",
+          "properties": {
+            "band": {
+              "type": "integer"
+            },
+            "justificationVi": {
+              "type": "string"
+            },
+            "strengthsVi": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "weaknessesVi": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "whyNotHigherVi": {
+              "type": "string"
+            },
+            "improvementsVi": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "band",
+            "justificationVi",
+            "strengthsVi",
+            "weaknessesVi",
+            "whyNotHigherVi",
+            "improvementsVi"
+          ],
+          "additionalProperties": false
+        },
+        "coherenceCohesion": {
+          "type": "object",
+          "properties": {
+            "band": {
+              "type": "integer"
+            },
+            "justificationVi": {
+              "type": "string"
+            },
+            "strengthsVi": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "weaknessesVi": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "whyNotHigherVi": {
+              "type": "string"
+            },
+            "improvementsVi": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "band",
+            "justificationVi",
+            "strengthsVi",
+            "weaknessesVi",
+            "whyNotHigherVi",
+            "improvementsVi"
+          ],
+          "additionalProperties": false
+        },
+        "lexicalResource": {
+          "type": "object",
+          "properties": {
+            "band": {
+              "type": "integer"
+            },
+            "justificationVi": {
+              "type": "string"
+            },
+            "strengthsVi": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "weaknessesVi": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "whyNotHigherVi": {
+              "type": "string"
+            },
+            "improvementsVi": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "band",
+            "justificationVi",
+            "strengthsVi",
+            "weaknessesVi",
+            "whyNotHigherVi",
+            "improvementsVi"
+          ],
+          "additionalProperties": false
+        },
+        "grammaticalRangeAccuracy": {
+          "type": "object",
+          "properties": {
+            "band": {
+              "type": "integer"
+            },
+            "justificationVi": {
+              "type": "string"
+            },
+            "strengthsVi": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "weaknessesVi": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "whyNotHigherVi": {
+              "type": "string"
+            },
+            "improvementsVi": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "band",
+            "justificationVi",
+            "strengthsVi",
+            "weaknessesVi",
+            "whyNotHigherVi",
+            "improvementsVi"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "task",
+        "coherenceCohesion",
+        "lexicalResource",
+        "grammaticalRangeAccuracy"
+      ],
+      "additionalProperties": false
+    },
+    "grammarErrors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "original": {
+            "type": "string"
+          },
+          "corrected": {
+            "type": "string"
+          },
+          "errorType": {
+            "type": "string"
+          },
+          "explanationVi": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "original",
+          "corrected",
+          "errorType",
+          "explanationVi",
+          "pattern"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "lexicalIssues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "original": {
+            "type": "string"
+          },
+          "suggestion": {
+            "type": "string"
+          },
+          "issueType": {
+            "type": "string"
+          },
+          "explanationVi": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "original",
+          "suggestion",
+          "issueType",
+          "explanationVi"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "successfulGrammar": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "excerpt": {
+            "type": "string"
+          },
+          "feature": {
+            "type": "string"
+          },
+          "commentVi": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "excerpt",
+          "feature",
+          "commentVi"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "priorityImprovementsVi": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "summaryVi": {
+      "type": "string"
+    },
+    "task1Analysis": {
+      "type": "object",
+      "properties": {
+        "overviewPresent": {
+          "type": "boolean"
+        },
+        "overviewAssessmentVi": {
+          "type": "string"
+        },
+        "keyFeaturesCoveredVi": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "missingOrWeakKeyFeaturesVi": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "factualErrors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "learnerClaim": {
+                "type": "string"
+              },
+              "correctedFact": {
+                "type": "string"
+              },
+              "severity": {
+                "type": "string"
+              },
+              "explanationVi": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "learnerClaim",
+              "correctedFact",
+              "severity",
+              "explanationVi"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "overviewPresent",
+        "overviewAssessmentVi",
+        "keyFeaturesCoveredVi",
+        "missingOrWeakKeyFeaturesVi",
+        "factualErrors"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "criteria",
+    "grammarErrors",
+    "lexicalIssues",
+    "successfulGrammar",
+    "priorityImprovementsVi",
+    "summaryVi",
+    "task1Analysis"
+  ],
+  "additionalProperties": false
+}

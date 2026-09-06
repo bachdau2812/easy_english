@@ -17,6 +17,7 @@ import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.data.domain.Page;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -95,8 +96,9 @@ public class LearningResourceController {
     public ApiResponse<List<IeltsWritingProblemSummaryResponse>> getIeltsWritingProblemsByTopic(
             @RequestParam(name = "topic_name", required = false) String topicName,
             @RequestParam(name = "topicName", required = false) String topicNameAlias,
-            @RequestParam String userId
+            Authentication authentication
     ) {
+        String userId = authentication.getName();
         String resolvedTopicName = topicName != null ? topicName : topicNameAlias;
         log.info("Request received: action=getIeltsWritingProblemsByTopic, topicName={}, userId={}", resolvedTopicName, userId);
         return success("Get IELTS writing problems successfully",
@@ -130,19 +132,24 @@ public class LearningResourceController {
 
     @GetMapping("/ielts-writing/attempt-history")
     public ApiResponse<List<UserVocabAttempt>> getIeltsWritingAttemptHistory(
-            @RequestParam String userId,
-            @RequestParam String exerciseId
+            @RequestParam String exerciseId,
+            Authentication authentication
     ) {
+        String userId = authentication.getName();
         log.info("Request received: action=getIeltsWritingAttemptHistory, userId={}, exerciseId={}", userId, exerciseId);
         return success("Get IELTS writing attempt history successfully",
                 learningResourceService.getIeltsWritingAttemptHistory(userId, exerciseId));
     }
     @PostMapping("/ielts-writing/reviews")
-    public ApiResponse<String> reviewIeltsWriting(@Valid @RequestBody IeltsWritingReviewRequest request) {
+    public ApiResponse<String> reviewIeltsWriting(
+            @Valid @RequestBody IeltsWritingReviewRequest request,
+            Authentication authentication
+    ) {
+        String userId = authentication.getName();
         log.info("Request received: action=reviewIeltsWriting, exerciseId={}, userId={}",
-                request.getExerciseId(), request.getUserId());
+                request.getExerciseId(), userId);
         return success("Review IELTS writing successfully",
-                learningResourceService.reviewIeltsWriting(request.getExerciseId(), request.getUserId(), request.getUserAnswer()));
+                learningResourceService.reviewIeltsWriting(request.getExerciseId(), userId, request.getUserAnswer()));
     }
     @PostMapping("/listen-exercises")
     public ApiResponse<String> insertListenExercisePlaceholder() {
