@@ -15,15 +15,22 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.http.HttpStatus;
 
 import java.net.http.HttpClient;
+import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Flow;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -63,15 +70,21 @@ class GroqWritingReviewTest {
         ArgumentCaptor<HttpRequest> requestCaptor = ArgumentCaptor.forClass(HttpRequest.class);
         verify(httpClient).send(requestCaptor.capture(), any());
         JsonNode body = objectMapper.readTree(readBody(requestCaptor.getValue()));
-        assertThat(body.path("max_completion_tokens").asInt()).isEqualTo(32768);
+        assertThat(body.path("max_completion_tokens").asInt()).isEqualTo(5000);
         assertThat(body.at("/response_format/type").asText()).isEqualTo("json_object");
         assertThat(body.path("temperature").asDouble()).isEqualTo(0.2);
-        assertThat(body.path("reasoning_effort").asText()).isEqualTo("medium");
+        assertThat(body.path("reasoning_effort").asText()).isEqualTo("low");
         String systemPrompt = body.at("/messages/0/content").asText();
         assertThat(systemPrompt)
                 .contains("\"grammarErrors\":[{", "\"strengthsVi\":[\"\"]")
+                .contains("taskStatement")
+                .doesNotContain("{{PROBLEM}}", "{{IMAGE_DESCRIPTION}}")
+                .doesNotContain("Discuss both views and give your opinion.")
                 .doesNotContain("additionalProperties", "\"required\"");
         JsonNode learnerMessage = objectMapper.readTree(body.at("/messages/1/content").asText());
+        assertThat(learnerMessage.path("taskStatement").asText())
+                .isEqualTo("Discuss both views and give your opinion.");
+        assertThat(learnerMessage.has("imageDescription")).isFalse();
         assertThat(learnerMessage.path("learnerEssay").asText()).isEqualTo(learnerEssay);
         assertThat(learnerMessage.path("wordCount").asInt()).isEqualTo(8);
     }
@@ -187,6 +200,154 @@ class GroqWritingReviewTest {
     }
 
     @Test
+    void retriesRateLimitOnceUsingRetryAfter() throws Exception {
+        stubExercise();
+        HttpResponse<String> rateLimited = rateLimitedResponse("0");
+        HttpResponse<String> successful = successfulResponse(validReview());
+        when(httpClient.send(any(HttpRequest.class),
+                org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any()))
+                .thenReturn(rateLimited, successful);
+
+        assertThat(reviewService.generateReview("exercise-1", "user-1", "My essay"))
+                .contains("\"overallBand\":6.5");
+        verify(httpClient, times(2)).send(any(HttpRequest.class), any());
+    }
+
+    @Test
+    void mapsSecondRateLimitToHttp429AndStopsAfterTwoCalls() throws Exception {
+        stubExercise();
+        HttpResponse<String> rateLimited = rateLimitedResponse("0");
+        when(httpClient.send(any(HttpRequest.class),
+                org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any()))
+                .thenReturn(rateLimited);
+
+        assertThatThrownBy(() -> reviewService.generateReview("exercise-1", "user-1", "My essay"))
+                .isInstanceOf(AppException.class)
+                .satisfies(error -> assertThat(((AppException) error).getErrorCode().getHttpStatus())
+                        .isEqualTo(HttpStatus.TOO_MANY_REQUESTS));
+        verify(httpClient, times(2)).send(any(HttpRequest.class), any());
+    }
+
+    @Test
+    void doesNotRetryBeforeProviderDelayLongerThanThirtySeconds() throws Exception {
+        stubExercise();
+        HttpResponse<String> response = rateLimitedResponse("45.5");
+        when(httpClient.send(any(HttpRequest.class),
+                org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any())).thenReturn(response);
+        assertThatThrownBy(() -> reviewService.generateReview("exercise-1", "user-1", "My essay"))
+                .isInstanceOf(AppException.class)
+                .extracting(error -> ((AppException) error).getErrorCode())
+                .isEqualTo(ErrorCode.WRITING_REVIEW_RATE_LIMITED);
+        verify(httpClient).send(any(HttpRequest.class), any());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"0,0", "0.125,125", "30,30000",
+            "45.5,45500", "NaN,1000", "-1,1000", "invalid,1000"})
+    void parsesRetryAfterWithSafeFallback(String header, long expected) {
+        HttpResponse<String> response = mock(HttpResponse.class);
+        when(response.headers()).thenReturn(HttpHeaders.of(
+                Map.of("Retry-After", List.of(header)), (name, value) -> true));
+        Long delay = ReflectionTestUtils.invokeMethod(reviewService, "retryDelayMillis", response);
+        assertThat(delay).isEqualTo(expected);
+    }
+
+    @Test
+    void rejectsConcurrentReviewAndReleasesPermitAfterFailure() throws Exception {
+        stubExercise();
+        HttpResponse<String> success = successfulResponse(validReview());
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        when(httpClient.send(any(HttpRequest.class),
+                org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any()))
+                .thenAnswer(invocation -> {
+                    entered.countDown();
+                    if (!release.await(5, TimeUnit.SECONDS)) {
+                        throw new AssertionError("Test did not release provider request");
+                    }
+                    throw new java.io.IOException("Provider unavailable");
+                }).thenReturn(success);
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var first = executor.submit(() -> reviewService.generateReview("exercise-1", "user-1", "My essay"));
+            try {
+                assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+                assertThatThrownBy(() -> reviewService.generateReview("exercise-1", "user-2", "Other essay"))
+                        .isInstanceOf(AppException.class)
+                        .extracting(error -> ((AppException) error).getErrorCode())
+                        .isEqualTo(ErrorCode.WRITING_REVIEW_RATE_LIMITED);
+            } finally {
+                release.countDown();
+            }
+            assertThatThrownBy(() -> first.get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(AppException.class);
+        }
+        assertThat(reviewService.generateReview("exercise-1", "user-1", "My essay"))
+                .contains("\"overallBand\":6.5");
+        verify(httpClient, times(2)).send(any(HttpRequest.class), any());
+    }
+
+    @Test
+    void metricsContainOnlySafeUsageAndQuotaFields() {
+        HttpResponse<String> response = mock(HttpResponse.class);
+        when(response.body()).thenReturn("""
+                {"usage":{"prompt_tokens":100,"completion_tokens":250,"total_tokens":350,
+                "completion_tokens_details":{"reasoning_tokens":50},
+                "prompt_tokens_details":{"cached_tokens":80}},"choices":[{"private":"essay"}]}
+                """);
+        when(response.headers()).thenReturn(HttpHeaders.of(Map.of(
+                "x-ratelimit-remaining-tokens", List.of("1234"),
+                "x-ratelimit-reset-tokens", List.of("1m2.5s")), (name, value) -> true));
+        String metrics = ReflectionTestUtils.invokeMethod(reviewService, "summarizeMetrics", response);
+        assertThat(metrics).contains("prompt=100", "completion=250", "reasoning=50", "cached=80",
+                "remaining=1234", "reset=1m2.5s").doesNotContain("private", "essay");
+        when(response.body()).thenReturn("{\"usage\":{\"prompt_tokens\":\"private essay\"}}");
+        when(response.headers()).thenReturn(HttpHeaders.of(Map.of(
+                "x-ratelimit-reset-tokens", List.of("private essay")), (name, value) -> true));
+        metrics = ReflectionTestUtils.invokeMethod(reviewService, "summarizeMetrics", response);
+        assertThat(metrics).contains("prompt=-1", "reset=unknown").doesNotContain("private", "essay");
+    }
+
+    @Test
+    void doesNotAddThirdAttemptWhenJsonRetryHitsRateLimit() throws Exception {
+        stubExercise();
+        when(httpResponse.statusCode()).thenReturn(400);
+        when(httpResponse.body()).thenReturn("{\"error\":{\"code\":\"json_validate_failed\"}}");
+        HttpResponse<String> rateLimited = rateLimitedResponse("0");
+        when(httpClient.send(any(HttpRequest.class),
+                org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any()))
+                .thenReturn(httpResponse, rateLimited);
+        assertThatThrownBy(() -> reviewService.generateReview("exercise-1", "user-1", "My essay"))
+                .isInstanceOf(AppException.class)
+                .extracting(error -> ((AppException) error).getErrorCode())
+                .isEqualTo(ErrorCode.WRITING_REVIEW_RATE_LIMITED);
+        verify(httpClient, times(2)).send(any(HttpRequest.class), any());
+    }
+
+    @Test
+    void interruptedRetryWaitRestoresInterruptAndReleasesPermit() throws Exception {
+        stubExercise();
+        HttpResponse<String> rateLimited = rateLimitedResponse("30");
+        HttpResponse<String> successful = successfulResponse(validReview());
+        when(httpClient.send(any(HttpRequest.class),
+                org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any()))
+                .thenAnswer(invocation -> {
+                    Thread.currentThread().interrupt();
+                    return rateLimited;
+                }).thenReturn(successful);
+        try {
+            assertThatThrownBy(() -> reviewService.generateReview("exercise-1", "user-1", "My essay"))
+                    .isInstanceOf(AppException.class);
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+            verify(httpClient).send(any(HttpRequest.class), any());
+        } finally {
+            Thread.interrupted();
+        }
+        assertThat(reviewService.generateReview("exercise-1", "user-1", "My essay"))
+                .contains("\"overallBand\":6.5");
+        verify(httpClient, times(2)).send(any(HttpRequest.class), any());
+    }
+
+    @Test
     void task1UsesOriginalPromptAndVisualContextAndReturnsTaskAchievement() throws Exception {
         IeltsWritingExercise exercise = new IeltsWritingExercise();
         exercise.setId("exercise-1");
@@ -213,10 +374,16 @@ class GroqWritingReviewTest {
         verify(httpClient).send(request.capture(), any());
         JsonNode body = objectMapper.readTree(readBody(request.getValue()));
         String expected = new org.springframework.core.io.ClassPathResource("prompts/ielts-writing-task-1.txt")
-                .getContentAsString(StandardCharsets.UTF_8)
-                .replace("{{PROBLEM}}", exercise.getProblem())
-                .replace("{{IMAGE_DESCRIPTION}}", exercise.getImageDescription());
+                .getContentAsString(StandardCharsets.UTF_8);
         assertThat(body.at("/messages/0/content").asText()).startsWith(expected);
+        assertThat(body.at("/messages/0/content").asText())
+                .contains("taskStatement", "imageDescription")
+                .doesNotContain("{{PROBLEM}}", "{{IMAGE_DESCRIPTION}}")
+                .doesNotContain(exercise.getProblem(), exercise.getImageDescription());
+        JsonNode learnerMessage = objectMapper.readTree(body.at("/messages/1/content").asText());
+        assertThat(learnerMessage.path("taskStatement").asText()).isEqualTo(exercise.getProblem());
+        assertThat(learnerMessage.path("imageDescription").asText())
+                .isEqualTo(exercise.getImageDescription());
         assertThat(body.at("/response_format/type").asText()).isEqualTo("json_object");
     }
 
@@ -330,6 +497,26 @@ class GroqWritingReviewTest {
 
     private void stubSuccessfulResponse(ObjectNode review) throws Exception {
         stubResponse(review, "stop");
+    }
+
+    private HttpResponse<String> successfulResponse(ObjectNode review) throws Exception {
+        HttpResponse<String> response = mock(HttpResponse.class);
+        ObjectNode choice = objectMapper.createObjectNode();
+        choice.put("finish_reason", "stop");
+        choice.putObject("message").put("content", objectMapper.writeValueAsString(review));
+        ObjectNode body = objectMapper.createObjectNode();
+        body.putArray("choices").add(choice);
+        when(response.statusCode()).thenReturn(200);
+        when(response.body()).thenReturn(objectMapper.writeValueAsString(body));
+        return response;
+    }
+
+    private HttpResponse<String> rateLimitedResponse(String retryAfter) {
+        HttpResponse<String> response = mock(HttpResponse.class);
+        when(response.statusCode()).thenReturn(429);
+        when(response.headers()).thenReturn(HttpHeaders.of(
+                Map.of("Retry-After", List.of(retryAfter)), (name, value) -> true));
+        return response;
     }
 
     private void stubResponse(ObjectNode review, String finishReason) throws Exception {

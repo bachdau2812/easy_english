@@ -29,6 +29,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.Semaphore;
 import java.util.regex.Pattern;
 
 @Slf4j
@@ -40,7 +41,8 @@ public class GroqWritingReview implements WritingReview {
     static final String MODEL = "openai/gpt-oss-120b";
     static final int MAX_ESSAY_CHARACTERS = 20_000;
     static final int MAX_STORED_TEXT_BYTES = 60_000;
-    static final int MAX_COMPLETION_TOKENS = 32_768;
+    static final int MAX_COMPLETION_TOKENS = 5_000;
+    static final long MAX_RATE_LIMIT_WAIT_MILLIS = 30_000;
     static final Pattern WORD_PATTERN = Pattern.compile("[\\p{L}\\p{N}]+(?:['\u2019\\-][\\p{L}\\p{N}]+)*");
     static final List<String> CRITERIA = List.of(
             "task", "coherenceCohesion", "lexicalResource", "grammaticalRangeAccuracy");
@@ -48,6 +50,8 @@ public class GroqWritingReview implements WritingReview {
     IeltsWritingExerciseRepository ieltsWritingExerciseRepository;
     ObjectMapper objectMapper;
     HttpClient httpClient;
+    // Protects this application's instance only; no requests are queued here.
+    Semaphore reviewPermit = new Semaphore(1);
 
     @NonFinal
     @Value("${groq.api.key:${grok.api.key:}}")
@@ -89,17 +93,25 @@ public class GroqWritingReview implements WritingReview {
 
         int wordCount = (int) WORD_PATTERN.matcher(userAnswer).results().count();
         JsonNode schema = taskType == 1 ? task1ResponseSchema : task2ResponseSchema;
-        String systemPrompt = buildSystemPrompt(exercise, taskType)
+        String systemPrompt = getSystemPrompt(exercise, taskType)
                 + "\n\nFill the compact JSON template below and return the complete JSON object. "
                 + "Replace every placeholder with review content. Arrays contain one example item only to show "
                 + "their shape; return [] when there is no supported item. Preserve every key and add no keys.\n"
                 + buildOutputTemplate(schema);
-        String learnerMessage = objectMapper.createObjectNode()
-                .put("wordCount", wordCount).put("learnerEssay", userAnswer).toString();
+        ObjectNode learnerInput = objectMapper.createObjectNode()
+                .put("taskStatement", exercise.getProblem().trim());
+        if (taskType == 1) {
+            learnerInput.put("imageDescription", exercise.getImageDescription().trim());
+        }
+        String learnerMessage = learnerInput.put("wordCount", wordCount)
+                .put("learnerEssay", userAnswer).toString();
 
-        log.info("Generating IELTS Writing review: exerciseId={}, userId={}, taskType={}, wordCount={}, format=json_object",
-                exerciseId, userId, taskType, wordCount);
+        if (!reviewPermit.tryAcquire()) {
+            throw new AppException(ErrorCode.WRITING_REVIEW_RATE_LIMITED);
+        }
         try {
+            log.info("Generating IELTS Writing review: exerciseId={}, userId={}, taskType={}, wordCount={}, format=json_object",
+                    exerciseId, userId, taskType, wordCount);
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(GROQ_CHAT_COMPLETIONS_URL))
                     .timeout(Duration.ofSeconds(120))
@@ -110,15 +122,33 @@ public class GroqWritingReview implements WritingReview {
                     .build();
             HttpResponse<String> response = httpClient.send(request,
                     HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (isJsonValidationFailure(response)) {
-                log.warn("Retrying Groq writing review after JSON validation failure: exerciseId={}", exerciseId);
+            log.info("Groq writing review response: exerciseId={}, attempt=1, status={}, {}",
+                    exerciseId, response.statusCode(), summarizeMetrics(response));
+            if (isRetryable(response)) {
+                if (response.statusCode() == 429) {
+                    long delayMillis = retryDelayMillis(response);
+                    if (delayMillis > MAX_RATE_LIMIT_WAIT_MILLIS) {
+                        log.warn("Groq retry delay exceeds writing review wait budget: exerciseId={}, delayMs={}",
+                                exerciseId, delayMillis);
+                        throw new AppException(ErrorCode.WRITING_REVIEW_RATE_LIMITED);
+                    }
+                    log.warn("Retrying rate-limited Groq writing review: exerciseId={}, delayMs={}",
+                            exerciseId, delayMillis);
+                    Thread.sleep(delayMillis);
+                } else {
+                    log.warn("Retrying Groq writing review after JSON validation failure: exerciseId={}",
+                            exerciseId);
+                }
                 response = httpClient.send(request,
                         HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                log.info("Groq writing review response: exerciseId={}, attempt=2, status={}, {}",
+                        exerciseId, response.statusCode(), summarizeMetrics(response));
             }
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 log.error("Groq writing review failed: status={}, exerciseId={}, providerError={}",
                         response.statusCode(), exerciseId, summarizeProviderError(response.body()));
-                throw new AppException(ErrorCode.WRITING_REVIEW_FAILED);
+                throw new AppException(response.statusCode() == 429
+                        ? ErrorCode.WRITING_REVIEW_RATE_LIMITED : ErrorCode.WRITING_REVIEW_FAILED);
             }
 
             JsonNode choice = objectMapper.readTree(response.body()).path("choices").path(0);
@@ -158,25 +188,24 @@ public class GroqWritingReview implements WritingReview {
             log.error("Groq writing review failed: exerciseId={}, exceptionType={}",
                     exerciseId, exception.getClass().getSimpleName());
             throw new AppException(ErrorCode.WRITING_REVIEW_FAILED);
+        } finally {
+            reviewPermit.release();
         }
     }
 
-    private String buildSystemPrompt(IeltsWritingExercise exercise, int taskType) {
+    private String getSystemPrompt(IeltsWritingExercise exercise, int taskType) {
         if (!StringUtils.hasText(exercise.getProblem())
                 || (taskType == 1 && !StringUtils.hasText(exercise.getImageDescription()))) {
             throw new AppException(ErrorCode.WRITING_REVIEW_FAILED);
         }
-        String template = taskType == 1 ? task1PromptTemplate : task2PromptTemplate;
-        return template.replace("{{PROBLEM}}", exercise.getProblem().trim())
-                .replace("{{IMAGE_DESCRIPTION}}",
-                        taskType == 1 ? exercise.getImageDescription().trim() : "");
+        return taskType == 1 ? task1PromptTemplate : task2PromptTemplate;
     }
 
     private String buildRequestBody(String systemPrompt, String learnerMessage) throws Exception {
         ObjectNode body = objectMapper.createObjectNode();
         body.put("model", MODEL);
         body.put("temperature", 0.2);
-        body.put("reasoning_effort", "medium");
+        body.put("reasoning_effort", "low");
         body.put("max_completion_tokens", MAX_COMPLETION_TOKENS);
         body.putObject("response_format").put("type", "json_object");
         ArrayNode messages = body.putArray("messages");
@@ -279,6 +308,57 @@ public class GroqWritingReview implements WritingReview {
         } catch (Exception ignored) {
             return false;
         }
+    }
+
+    private boolean isRetryable(HttpResponse<String> response) {
+        return response.statusCode() == 429 || isJsonValidationFailure(response);
+    }
+
+    private long retryDelayMillis(HttpResponse<String> response) {
+        if (response.headers() == null) {
+            return 1_000;
+        }
+        String value = response.headers().firstValue("Retry-After").orElse("1");
+        try {
+            double seconds = Double.parseDouble(value);
+            if (!Double.isFinite(seconds) || seconds < 0) {
+                return 1_000;
+            }
+            return (long) Math.ceil(seconds * 1_000);
+        } catch (NumberFormatException ignored) {
+            return 1_000;
+        }
+    }
+
+    private String summarizeMetrics(HttpResponse<String> response) {
+        JsonNode usage = objectMapper.createObjectNode();
+        try {
+            JsonNode root = objectMapper.readTree(response.body());
+            if (root != null) {
+                usage = root.path("usage");
+            }
+        } catch (Exception ignored) {
+            // Metrics are optional and must never prevent review/error handling.
+        }
+        return "prompt=" + tokenCount(usage.path("prompt_tokens"))
+                + ",completion=" + tokenCount(usage.path("completion_tokens"))
+                + ",total=" + tokenCount(usage.path("total_tokens"))
+                + ",reasoning=" + tokenCount(usage.at("/completion_tokens_details/reasoning_tokens"))
+                + ",cached=" + tokenCount(usage.at("/prompt_tokens_details/cached_tokens"))
+                + ",remaining=" + safeRateHeader(response, "x-ratelimit-remaining-tokens", "[0-9]{1,18}")
+                + ",reset=" + safeRateHeader(response, "x-ratelimit-reset-tokens",
+                        "(?:[0-9]{1,9}(?:\\.[0-9]{1,9})?(?:ms|s|m|h))+");
+    }
+
+    private long tokenCount(JsonNode value) {
+        return value.isIntegralNumber() && value.canConvertToLong() && value.longValue() >= 0
+                ? value.longValue() : -1;
+    }
+
+    private String safeRateHeader(HttpResponse<String> response, String header, String pattern) {
+        String value = response.headers() == null ? ""
+                : response.headers().firstValue(header).orElse("");
+        return value.length() <= 64 && value.matches(pattern) ? value : "unknown";
     }
 
     private String summarizeProviderError(String body) {
