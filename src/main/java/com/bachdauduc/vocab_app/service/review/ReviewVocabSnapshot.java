@@ -19,13 +19,22 @@ public record ReviewVocabSnapshot(
         WordSenseResponse wordSense,
         List<WordSoundResponse> sounds,
         List<ReviewExample> examples,
-        Instant generatedAt
+        Instant generatedAt,
+        List<String> forms
 ) {
-    public static final int CURRENT_SCHEMA_VERSION = 1;
+    public static final int CURRENT_SCHEMA_VERSION = 2;
 
     public ReviewVocabSnapshot {
         sounds = sounds == null ? List.of() : List.copyOf(sounds);
         examples = examples == null ? List.of() : List.copyOf(examples);
+        forms = forms == null ? List.of() : List.copyOf(forms);
+    }
+
+    public ReviewVocabSnapshot(int schemaVersion, String wordId, String senseKey, String langCode,
+                               String word, String pos, String meaning, WordSenseResponse wordSense,
+                               List<WordSoundResponse> sounds, List<ReviewExample> examples, Instant generatedAt) {
+        this(schemaVersion, wordId, senseKey, langCode, word, pos, meaning, wordSense, sounds, examples,
+                generatedAt, List.of());
     }
 
     public Optional<String> playableSoundUrl() {

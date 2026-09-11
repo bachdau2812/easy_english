@@ -4,6 +4,7 @@ import com.bachdauduc.vocab_app.dto.response.worddata.WordSenseResponse;
 import com.bachdauduc.vocab_app.dto.response.worddata.WordSoundResponse;
 import com.bachdauduc.vocab_app.entity.UserVocabulary;
 import com.bachdauduc.vocab_app.entity.Word;
+import com.bachdauduc.vocab_app.entity.WordForm;
 import com.bachdauduc.vocab_app.entity.WordExample;
 import com.bachdauduc.vocab_app.entity.WordExampleLocalization;
 import com.bachdauduc.vocab_app.entity.WordSense;
@@ -12,6 +13,7 @@ import com.bachdauduc.vocab_app.entity.WordSound;
 import com.bachdauduc.vocab_app.repository.WordExampleLocalizationRepository;
 import com.bachdauduc.vocab_app.repository.WordExampleRepository;
 import com.bachdauduc.vocab_app.repository.WordRepository;
+import com.bachdauduc.vocab_app.repository.WordFormRepository;
 import com.bachdauduc.vocab_app.repository.WordSenseLocalizationRepository;
 import com.bachdauduc.vocab_app.repository.WordSenseRepository;
 import com.bachdauduc.vocab_app.repository.WordSoundRepository;
@@ -40,6 +42,7 @@ public class ReviewVocabDataLoader {
     private static final String SOURCE_MOCHI = "MOCHI";
 
     private final WordRepository wordRepository;
+    private final WordFormRepository wordFormRepository;
     private final WordSenseRepository wordSenseRepository;
     private final WordSenseLocalizationRepository wordSenseLocalizationRepository;
     private final WordSoundRepository wordSoundRepository;
@@ -88,6 +91,7 @@ public class ReviewVocabDataLoader {
         exampleSenseIds.addAll(localizedSenseIds);
 
         Map<String, Word> words = byId(wordRepository.findAllById(wordIds), Word::getId);
+        Map<String, List<WordForm>> formsByWord = group(wordFormRepository.findByWordIdIn(wordIds), WordForm::getWordId);
         Map<String, WordSense> senses = byId(wordSenseRepository.findAllById(senseIds), WordSense::getId);
         Map<String, WordSenseLocalization> localizedSenses = byId(
                 wordSenseLocalizationRepository.findAllById(localizedSenseIds),
@@ -122,6 +126,7 @@ public class ReviewVocabDataLoader {
                     valueByTextKey(localizedSenses, vocabulary.getSenseLocalizedId()),
                     valueByTextKey(translationsBySense, vocabulary.getSenseId()),
                     soundsByWord.getOrDefault(vocabulary.getWordId(), List.of()),
+                    formsByWord.getOrDefault(vocabulary.getWordId(), List.of()),
                     examplesBySense.getOrDefault(exampleSenseId(vocabulary), List.of()),
                     exampleTranslations,
                     langCode
@@ -140,6 +145,7 @@ public class ReviewVocabDataLoader {
             WordSenseLocalization localizedSense,
             WordSenseLocalization translation,
             List<WordSound> sounds,
+            List<WordForm> forms,
             List<WordExample> examples,
             Map<String, WordExampleLocalization> exampleTranslations,
             String langCode
@@ -184,7 +190,8 @@ public class ReviewVocabDataLoader {
                 wordSense,
                 soundResponses,
                 reviewExamples,
-                Instant.now()
+                Instant.now(),
+                forms.stream().map(WordForm::getForm).filter(StringUtils::hasText).distinct().toList()
         );
     }
 

@@ -7,9 +7,11 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Collection;
 
 public interface WordFormRepository extends JpaRepository<WordForm, String> {
     List<WordForm> findByWordId(String wordId);
+    List<WordForm> findByWordIdIn(Collection<String> wordIds);
 
     @Query(value = """
             SELECT

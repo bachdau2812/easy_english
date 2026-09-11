@@ -106,8 +106,8 @@ class ReviewSnapshotCacheTest {
 
     private ReviewVocabSnapshot snapshot() {
         return new ReviewVocabSnapshot(
-                1, "word-1", "sense:sense-1", "vi", "bank", "noun", "bờ sông",
-                null, List.of(), List.of(), Instant.parse("2026-08-08T00:00:00Z")
+                ReviewVocabSnapshot.CURRENT_SCHEMA_VERSION, "word-1", "sense:sense-1", "vi", "bank", "noun", "bờ sông",
+                null, List.of(), List.of(), Instant.parse("2026-08-08T00:00:00Z"), List.of("banks")
         );
     }
 }

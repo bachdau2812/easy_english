@@ -20,8 +20,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.random.RandomGenerator;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Component
 public class ReviewQuizFactory {
@@ -43,7 +41,7 @@ public class ReviewQuizFactory {
         EnumSet<ExerciseType> eligible = EnumSet.noneOf(ExerciseType.class);
         boolean hasWord = StringUtils.hasText(snapshot.word());
         boolean hasMeaning = StringUtils.hasText(snapshot.meaning());
-        boolean hasExample = !snapshot.examples().isEmpty();
+        boolean hasExample = !matchingExamples(snapshot).isEmpty();
         boolean hasSound = snapshot.playableSoundUrl().isPresent();
         boolean canMask = normalizedLetterCount(snapshot.word()) > 2;
 
@@ -107,19 +105,26 @@ public class ReviewQuizFactory {
                     .build();
             case VOCAB_CHOOSE_WORD_IN_SENTENCE_BLANK -> {
                 SentenceTransform sentence = transformSentence(snapshot, SentenceMode.BLANK, null);
-                yield response.correctAnswer(snapshot.word())
+                yield response.correctAnswer(sentence.match().surface())
                         .missIndex(sentence.index())
+                        .maskedWord(sentence.maskedWord())
+                        .targetSpans(sentence.match().spans())
+                        .example(toExample(target, snapshot, sentence.example()))
                         .sentence(sentence.sentence())
                         .trans(sentence.translation())
-                        .listAnswers(options(context.wordDistractors(), snapshot.word(), 4))
+                        .listAnswers(options(distinctWithout(context.wordDistractors(), snapshot.word()),
+                                sentence.match().surface(), 4))
                         .build();
             }
             case VOCAB_FILL_WORD_IN_SENTENCE_BLANK -> {
-                MaskedWord masked = maskedWord(snapshot.word(), target.getLevel());
-                SentenceTransform sentence = transformSentence(snapshot, SentenceMode.REPLACE, masked.value());
-                yield response.correctAnswer(snapshot.word())
+                MatchedExample selected = randomMatchingExample(snapshot);
+                MaskedWord masked = maskedWord(selected.match().surface(), target.getLevel());
+                SentenceTransform sentence = transformSentence(selected, SentenceMode.REPLACE, masked.value());
+                yield response.correctAnswer(selected.match().surface())
                         .metadata(masked.characters())
                         .maskedWord(masked.value())
+                        .targetSpans(sentence.match().spans())
+                        .example(toExample(target, snapshot, sentence.example()))
                         .missIndex(sentence.index())
                         .sentence(sentence.sentence())
                         .trans(sentence.translation())
@@ -144,6 +149,9 @@ public class ReviewQuizFactory {
                         context.meaningDistractors(), snapshot.meaning(), ErrorCode.INVALID_EXERCISE_TYPE);
                 yield response.correctAnswer(indexed.correctAnswer())
                         .metadata(indexed.values())
+                        .maskedWord(sentence.maskedWord())
+                        .targetSpans(sentence.match().spans())
+                        .example(toExample(target, snapshot, sentence.example()))
                         .missIndex(sentence.index())
                         .sentence(sentence.sentence())
                         .trans(sentence.translation())
@@ -158,6 +166,9 @@ public class ReviewQuizFactory {
                 );
                 yield response.correctAnswer(indexed.correctAnswer())
                         .metadata(indexed.values())
+                        .maskedWord(sentence.maskedWord())
+                        .targetSpans(sentence.match().spans())
+                        .example(toExample(target, snapshot, sentence.example()))
                         .missIndex(sentence.index())
                         .sentence(sentence.sentence())
                         .trans(sentence.translation())
@@ -284,34 +295,35 @@ public class ReviewQuizFactory {
             SentenceMode mode,
             String replacement
     ) {
-        ReviewExample example = randomExample(snapshot);
-        if (!StringUtils.hasText(example.sentence())) {
-            throw new AppException(ErrorCode.WORD_EXAMPLE_NOT_FOUND);
-        }
-        Pattern pattern = Pattern.compile(
-                Pattern.quote(snapshot.word()),
-                Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE
-        );
-        Matcher matcher = pattern.matcher(example.sentence());
-        if (!matcher.find()) {
-            return new SentenceTransform(example.sentence(), example.translation(), -1);
-        }
-        String value = switch (mode) {
-            case BLANK -> "_".repeat(matcher.end() - matcher.start());
-            case REPLACE -> replacement;
-            case UNDERLINE -> "<u>" + example.sentence().substring(matcher.start(), matcher.end()) + "</u>";
-        };
-        String sentence = example.sentence().substring(0, matcher.start())
-                + value
-                + example.sentence().substring(matcher.end());
-        return new SentenceTransform(sentence, example.translation(), matcher.start());
+        return transformSentence(randomMatchingExample(snapshot), mode, replacement);
     }
 
-    private ReviewExample randomExample(ReviewVocabSnapshot snapshot) {
-        if (snapshot.examples().isEmpty()) {
+    private SentenceTransform transformSentence(MatchedExample selected, SentenceMode mode, String replacement) {
+        ReviewExample example = selected.example();
+        ReviewSentenceMatcher.Match match = selected.match();
+        List<String> parts = switch (mode) {
+            case BLANK -> match.spans().stream().map(span -> "_".repeat(span.text().length())).toList();
+            case REPLACE -> match.splitReplacement(replacement);
+            case UNDERLINE -> match.spans().stream().map(span -> "<u>" + span.text() + "</u>").toList();
+        };
+        String masked = mode == SentenceMode.UNDERLINE ? match.surface() : String.join(" ", parts);
+        return new SentenceTransform(match.replace(example.sentence(), parts), example.translation(),
+                match.spans().getFirst().start(), masked, match, example);
+    }
+
+    private List<MatchedExample> matchingExamples(ReviewVocabSnapshot snapshot) {
+        return snapshot.examples().stream()
+                .flatMap(example -> ReviewSentenceMatcher.find(example.sentence(), snapshot.word(), snapshot.pos(),
+                        snapshot.forms()).stream().map(match -> new MatchedExample(example, match)))
+                .toList();
+    }
+
+    private MatchedExample randomMatchingExample(ReviewVocabSnapshot snapshot) {
+        List<MatchedExample> examples = matchingExamples(snapshot);
+        if (examples.isEmpty()) {
             throw new AppException(ErrorCode.WORD_EXAMPLE_NOT_FOUND);
         }
-        return snapshot.examples().get(random.nextInt(snapshot.examples().size()));
+        return examples.get(random.nextInt(examples.size()));
     }
 
     private ReviewExample preferredExample(ReviewVocabSnapshot snapshot) {
@@ -350,6 +362,10 @@ public class ReviewQuizFactory {
     private record IndexedOptions(Map<Integer, String> values, String correctAnswer) {
     }
 
-    private record SentenceTransform(String sentence, String translation, int index) {
+    private record MatchedExample(ReviewExample example, ReviewSentenceMatcher.Match match) {
+    }
+
+    private record SentenceTransform(String sentence, String translation, int index, String maskedWord,
+                                     ReviewSentenceMatcher.Match match, ReviewExample example) {
     }
 }

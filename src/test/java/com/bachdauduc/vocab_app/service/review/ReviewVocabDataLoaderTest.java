@@ -2,6 +2,7 @@ package com.bachdauduc.vocab_app.service.review;
 
 import com.bachdauduc.vocab_app.entity.UserVocabulary;
 import com.bachdauduc.vocab_app.entity.Word;
+import com.bachdauduc.vocab_app.entity.WordForm;
 import com.bachdauduc.vocab_app.entity.WordExample;
 import com.bachdauduc.vocab_app.entity.WordExampleLocalization;
 import com.bachdauduc.vocab_app.entity.WordSense;
@@ -10,6 +11,7 @@ import com.bachdauduc.vocab_app.entity.WordSound;
 import com.bachdauduc.vocab_app.repository.WordExampleLocalizationRepository;
 import com.bachdauduc.vocab_app.repository.WordExampleRepository;
 import com.bachdauduc.vocab_app.repository.WordRepository;
+import com.bachdauduc.vocab_app.repository.WordFormRepository;
 import com.bachdauduc.vocab_app.repository.WordSenseLocalizationRepository;
 import com.bachdauduc.vocab_app.repository.WordSenseRepository;
 import com.bachdauduc.vocab_app.repository.WordSoundRepository;
@@ -31,6 +33,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class ReviewVocabDataLoaderTest {
     @Mock WordRepository wordRepository;
+    @Mock WordFormRepository wordFormRepository;
     @Mock WordSenseRepository wordSenseRepository;
     @Mock WordSenseLocalizationRepository wordSenseLocalizationRepository;
     @Mock WordSoundRepository wordSoundRepository;
@@ -44,6 +47,7 @@ class ReviewVocabDataLoaderTest {
     void setUp() {
         loader = new ReviewVocabDataLoader(
                 wordRepository,
+                wordFormRepository,
                 wordSenseRepository,
                 wordSenseLocalizationRepository,
                 wordSoundRepository,
@@ -69,6 +73,8 @@ class ReviewVocabDataLoaderTest {
         when(wordSenseLocalizationRepository.findBySenseIdInAndLangCode(any(), eq("vi")))
                 .thenReturn(List.of(localization));
         when(wordSoundRepository.findByWordIdIn(any())).thenReturn(List.of(sound));
+        when(wordFormRepository.findByWordIdIn(any())).thenReturn(List.of(
+                new WordForm("form-1", "word-1", "banks", "banks", null)));
         when(wordExampleRepository.findBySenseIdIn(any())).thenReturn(List.of(example));
         when(wordExampleLocalizationRepository.findByExampleIdInAndLangCode(any(), eq("vi")))
                 .thenReturn(List.of(exampleLocalization));
@@ -78,6 +84,7 @@ class ReviewVocabDataLoaderTest {
         assertThat(result).containsKey("uv-1");
         assertThat(result.get("uv-1").meaning()).isEqualTo("bờ sông");
         assertThat(result.get("uv-1").playableSoundUrl()).contains("audio.mp3");
+        assertThat(result.get("uv-1").forms()).containsExactly("banks");
         assertThat(result.get("uv-1").examples()).containsExactly(
                 new ReviewExample("example-1", "The bank was flooded.", "Bờ sông bị ngập.")
         );

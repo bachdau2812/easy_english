@@ -33,6 +33,7 @@ public class VocabReviewQuizResponse {
     List<String> listAnswers;
     Map<Integer, String> metadata;
     String maskedWord;
+    List<VocabReviewTargetSpan> targetSpans;
     String audioUrl;
     Integer missIndex;
     String sentence;

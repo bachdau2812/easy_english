@@ -89,7 +89,6 @@ class ExerciseServiceTest {
         vocabulary.setLevel(1);
 
         when(userInfoRepository.existsById("user-1")).thenReturn(true);
-        when(balancedReviewQuizScheduler.schedule(any())).thenReturn(java.util.Map.of());
     }
 
     @Test
@@ -142,7 +141,9 @@ class ExerciseServiceTest {
         });
         when(reviewQuizFactory.eligibleTypes(any(), any(), any()))
                 .thenReturn(Set.of(ExerciseType.VOCAB_WORD_TO_MEANING));
-        when(balancedReviewQuizScheduler.schedule(any())).thenAnswer(invocation -> {
+        when(reviewProgressStore.availableTypes(anyString(), anyString(), any()))
+                .thenAnswer(invocation -> invocation.getArgument(2));
+        when(balancedReviewQuizScheduler.schedule(any(), any())).thenAnswer(invocation -> {
             List<com.bachdauduc.vocab_app.service.review.ReviewTargetEligibility> targets =
                     invocation.getArgument(0);
             Map<String, ExerciseType> assignments = new LinkedHashMap<>();

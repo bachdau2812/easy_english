@@ -316,61 +316,62 @@ public class ExerciseService {
                         )
                 ))
                 .toList();
-        Map<String, ExerciseType> assignments = balancedReviewQuizScheduler.schedule(targets);
-        Map<String, Set<ExerciseType>> eligibleById = targets.stream()
-                .collect(Collectors.toMap(
-                        ReviewTargetEligibility::userVocabId,
-                        ReviewTargetEligibility::eligibleTypes
-                ));
-
         List<VocabReviewQuizResponse> quizzes = new ArrayList<>();
         Map<ExerciseType, Integer> emittedCounts = new java.util.EnumMap<>(ExerciseType.class);
-        for (UserVocabulary vocabulary : contextVocabularies) {
-            if (quizzes.size() >= maximumQuizCount) {
+        Map<String, Set<ExerciseType>> pending = new LinkedHashMap<>();
+        Map<String, ExerciseType> assignments = new LinkedHashMap<>();
+        Set<String> considered = new LinkedHashSet<>();
+        int cursor = 0;
+
+        while (quizzes.size() < maximumQuizCount) {
+            // Fill only the current session. Overflow stays outside the allocation until needed.
+            while (pending.size() < maximumQuizCount - quizzes.size() && cursor < targets.size()) {
+                ReviewTargetEligibility candidate = targets.get(cursor++);
+                if (!considered.add(candidate.userVocabId())) {
+                    continue;
+                }
+                Set<ExerciseType> available = reviewProgressStore.availableTypes(
+                        userId, candidate.userVocabId(), candidate.eligibleTypes());
+                Set<ExerciseType> remaining = new LinkedHashSet<>(candidate.eligibleTypes());
+                remaining.retainAll(available);
+                if (!remaining.isEmpty()) {
+                    pending.put(candidate.userVocabId(), remaining);
+                    assignments.clear();
+                }
+            }
+            if (pending.isEmpty()) {
                 break;
             }
-            if (!targetIds.contains(vocabulary.getId())) {
-                continue;
+            if (assignments.isEmpty()) {
+                List<ReviewTargetEligibility> session = pending.entrySet().stream()
+                        .map(entry -> new ReviewTargetEligibility(entry.getKey(), entry.getValue()))
+                        .toList();
+                assignments.putAll(balancedReviewQuizScheduler.schedule(session, emittedCounts));
             }
-            ReviewVocabSnapshot snapshot = snapshots.get(vocabulary.getId());
-            ExerciseType assigned = assignments.get(vocabulary.getId());
-            if (snapshot == null || assigned == null) {
-                continue;
+
+            String vocabularyId = pending.keySet().iterator().next();
+            ExerciseType assigned = assignments.get(vocabularyId);
+            Optional<ExerciseType> reservation = reviewProgressStore.reserveFirstAvailable(
+                    userId, vocabularyId, List.of(assigned));
+            Optional<VocabReviewQuizResponse> quiz = reservation.flatMap(type -> createReservedQuiz(
+                    userId, context.vocabulary(vocabularyId), snapshots.get(vocabularyId), context, type));
+            if (quiz.isPresent()) {
+                quizzes.add(quiz.get());
+                emittedCounts.merge(assigned, 1, Integer::sum);
+                pending.remove(vocabularyId);
+                assignments.remove(vocabularyId);
+            } else {
+                // A concurrent reservation or unusable word/type must not distort the remaining quota.
+                // Removing the attempted type makes retries finite even if Redis is unavailable.
+                Set<ExerciseType> remaining = pending.get(vocabularyId);
+                remaining.remove(assigned);
+                if (remaining.isEmpty()) {
+                    pending.remove(vocabularyId);
+                }
+                assignments.clear();
             }
-            List<ExerciseType> candidates = orderedCandidates(
-                    assigned,
-                    eligibleById.getOrDefault(vocabulary.getId(), Set.of()),
-                    emittedCounts
-            );
-            Optional<ExerciseType> reservedType =
-                    reviewProgressStore.reserveFirstAvailable(userId, vocabulary.getId(), candidates);
-            if (reservedType.isEmpty()) {
-                continue;
-            }
-            createReservedQuiz(
-                    userId, vocabulary, snapshot, context, reservedType.get()
-            ).ifPresent(quiz -> {
-                quizzes.add(quiz);
-                emittedCounts.merge(reservedType.get(), 1, Integer::sum);
-            });
         }
         return List.copyOf(quizzes);
-    }
-
-    private List<ExerciseType> orderedCandidates(
-            ExerciseType assigned,
-            Set<ExerciseType> eligibleTypes,
-            Map<ExerciseType, Integer> emittedCounts
-    ) {
-        List<ExerciseType> candidates = new ArrayList<>();
-        candidates.add(assigned);
-        eligibleTypes.stream()
-                .filter(type -> !type.equals(assigned))
-                .sorted(Comparator
-                        .comparingInt((ExerciseType type) -> emittedCounts.getOrDefault(type, 0))
-                        .thenComparing(Enum::name))
-                .forEach(candidates::add);
-        return candidates;
     }
 
     private Optional<VocabReviewQuizResponse> createReservedQuiz(
@@ -467,28 +468,7 @@ public class ExerciseService {
             List<String> reviewUserVocabIds,
             String langCode
     ) {
-        log.debug("Start service: method=generateChooseWordInSentenceBlankQuiz, userVocabId={}, reviewSize={}, langCode={}",
-                userVocabId, reviewUserVocabIds.size(), langCode);
-        List<VocabContext> contexts = buildVocabContexts(reviewUserVocabIds, langCode);
-        VocabContext current = getRequiredContext(contexts, userVocabId);
-        SentenceBlank sentenceBlank = randomSentenceBlank(current, langCode);
-
-        List<String> answers = distinctShuffledValues(contexts.stream()
-                .filter(context -> !context.userVocabulary().getId().equals(userVocabId))
-                .map(context -> context.word().getWord())
-                .filter(StringUtils::hasText)
-                .toList());
-        answers = takeWithCorrectAnswer(answers, current.word().getWord(), 4);
-
-        log.info("Choose-word-in-sentence quiz generated: userVocabId={}, wordId={}, answerCount={}, missIndex={}",
-                userVocabId, current.word().getId(), answers.size(), sentenceBlank.missIndex());
-        return baseResponse(current, ExerciseType.VOCAB_CHOOSE_WORD_IN_SENTENCE_BLANK, langCode)
-                .correctAnswer(current.word().getWord())
-                .missIndex(sentenceBlank.missIndex())
-                .sentence(sentenceBlank.sentence())
-                .trans(sentenceBlank.trans())
-                .listAnswers(answers)
-                .build();
+        return generateSentenceQuiz(userVocabId, reviewUserVocabIds, langCode, ExerciseType.VOCAB_CHOOSE_WORD_IN_SENTENCE_BLANK);
     }
 
     public VocabReviewQuizResponse generateFillWordInSentenceBlankQuiz(
@@ -496,27 +476,7 @@ public class ExerciseService {
             List<String> reviewUserVocabIds,
             String langCode
     ) {
-        log.debug("Start service: method=generateFillWordInSentenceBlankQuiz, userVocabId={}, reviewSize={}, langCode={}",
-                userVocabId, reviewUserVocabIds.size(), langCode);
-        VocabContext current = getRequiredContext(buildVocabContexts(reviewUserVocabIds, langCode), userVocabId);
-        String word = current.word().getWord();
-        if (normalizedLetterCount(word) <= 2) {
-            throw new AppException(ErrorCode.INVALID_EXERCISE_TYPE);
-        }
-        Map<Integer, String> missingCharacters = randomMissingCharacters(word, current.userVocabulary().getLevel());
-        String maskedWord = maskMissingCharacters(word, missingCharacters);
-        SentenceBlank sentenceBlank = randomHintedSentenceBlank(current, langCode, maskedWord);
-
-        log.info("Fill-word-in-sentence quiz generated: userVocabId={}, wordId={}, missIndex={}, missingCount={}",
-                userVocabId, current.word().getId(), sentenceBlank.missIndex(), missingCharacters.size());
-        return baseResponse(current, ExerciseType.VOCAB_FILL_WORD_IN_SENTENCE_BLANK, langCode)
-                .correctAnswer(word)
-                .metadata(missingCharacters)
-                .maskedWord(maskedWord)
-                .missIndex(sentenceBlank.missIndex())
-                .sentence(sentenceBlank.sentence())
-                .trans(sentenceBlank.trans())
-                .build();
+        return generateSentenceQuiz(userVocabId, reviewUserVocabIds, langCode, ExerciseType.VOCAB_FILL_WORD_IN_SENTENCE_BLANK);
     }
 
     public VocabReviewQuizResponse generateMeaningToSoundQuiz(
@@ -546,22 +506,7 @@ public class ExerciseService {
             List<String> reviewUserVocabIds,
             String langCode
     ) {
-        log.debug("Start service: method=generateSentenceToMeaningQuiz, userVocabId={}, reviewSize={}, langCode={}",
-                userVocabId, reviewUserVocabIds.size(), langCode);
-        List<VocabContext> contexts = buildVocabContexts(reviewUserVocabIds, langCode);
-        VocabContext current = getRequiredContext(contexts, userVocabId);
-        SentenceBlank sentence = randomUnderlinedSentence(current, langCode);
-        IndexedOptions meaningOptions = meaningOptions(current, contexts);
-
-        log.info("Sentence-to-meaning quiz generated: userVocabId={}, wordId={}, optionCount={}, missIndex={}",
-                userVocabId, current.word().getId(), meaningOptions.metadata().size(), sentence.missIndex());
-        return baseResponse(current, ExerciseType.VOCAB_SENTENCE_TO_MEANING, langCode)
-                .correctAnswer(meaningOptions.correctAnswer())
-                .metadata(meaningOptions.metadata())
-                .missIndex(sentence.missIndex())
-                .sentence(sentence.sentence())
-                .trans(sentence.trans())
-                .build();
+        return generateSentenceQuiz(userVocabId, reviewUserVocabIds, langCode, ExerciseType.VOCAB_SENTENCE_TO_MEANING);
     }
 
     public VocabReviewQuizResponse generateSentenceBlankToSoundQuiz(
@@ -569,22 +514,22 @@ public class ExerciseService {
             List<String> reviewUserVocabIds,
             String langCode
     ) {
-        log.debug("Start service: method=generateSentenceBlankToSoundQuiz, userVocabId={}, reviewSize={}, langCode={}",
-                userVocabId, reviewUserVocabIds.size(), langCode);
-        List<VocabContext> contexts = buildVocabContexts(reviewUserVocabIds, langCode);
-        VocabContext current = getRequiredContext(contexts, userVocabId);
-        SentenceBlank sentenceBlank = randomSentenceBlank(current, langCode);
-        IndexedOptions soundOptions = soundOptions(current, contexts);
+        return generateSentenceQuiz(userVocabId, reviewUserVocabIds, langCode, ExerciseType.VOCAB_SENTENCE_BLANK_TO_SOUND);
+    }
 
-        log.info("Sentence-blank-to-sound quiz generated: userVocabId={}, wordId={}, optionCount={}, missIndex={}",
-                userVocabId, current.word().getId(), soundOptions.metadata().size(), sentenceBlank.missIndex());
-        return baseResponse(current, ExerciseType.VOCAB_SENTENCE_BLANK_TO_SOUND, langCode)
-                .correctAnswer(soundOptions.correctAnswer())
-                .metadata(soundOptions.metadata())
-                .missIndex(sentenceBlank.missIndex())
-                .sentence(sentenceBlank.sentence())
-                .trans(sentenceBlank.trans())
-                .build();
+    private VocabReviewQuizResponse generateSentenceQuiz(
+            String userVocabId, List<String> reviewUserVocabIds, String langCode, ExerciseType type
+    ) {
+        List<UserVocabulary> vocabularies = userVocabularyRepository.findAllById(reviewUserVocabIds);
+        UserVocabulary target = vocabularies.stream()
+                .filter(vocabulary -> vocabulary.getId().equals(userVocabId))
+                .findFirst().orElseThrow(() -> new AppException(ErrorCode.USER_VOCABULARY_NOT_FOUND));
+        Map<String, ReviewVocabSnapshot> snapshots = reviewVocabDataLoader.load(vocabularies, langCode);
+        ReviewVocabSnapshot snapshot = snapshots.get(userVocabId);
+        if (snapshot == null) {
+            throw new AppException(ErrorCode.WORD_NOT_FOUND);
+        }
+        return reviewQuizFactory.create(target, snapshot, ReviewRequestContext.create(vocabularies, snapshots), type);
     }
 
     private List<VocabContext> buildVocabContexts(List<String> userVocabIds, String langCode) {
@@ -861,39 +806,6 @@ public class ExerciseService {
         return translatedExample.isPresent() ? translatedExample : examples.stream().findFirst();
     }
 
-    private SentenceBlank randomSentenceBlank(VocabContext context, String langCode) {
-        List<WordExampleProjection> filteredExamples = loadReviewExamples(context, langCode);
-
-        if (filteredExamples.isEmpty()) {
-            throw new AppException(ErrorCode.WORD_EXAMPLE_NOT_FOUND);
-        }
-
-        WordExampleProjection example = filteredExamples.get(ThreadLocalRandom.current().nextInt(filteredExamples.size()));
-        return blankWordInSentence(example.getSentence(), example.getTrans(), context.word().getWord());
-    }
-
-    private SentenceBlank randomHintedSentenceBlank(VocabContext context, String langCode, String maskedWord) {
-        List<WordExampleProjection> filteredExamples = loadReviewExamples(context, langCode);
-
-        if (filteredExamples.isEmpty()) {
-            throw new AppException(ErrorCode.WORD_EXAMPLE_NOT_FOUND);
-        }
-
-        WordExampleProjection example = filteredExamples.get(ThreadLocalRandom.current().nextInt(filteredExamples.size()));
-        return replaceWordInSentence(example.getSentence(), example.getTrans(), context.word().getWord(), maskedWord);
-    }
-
-    private SentenceBlank randomUnderlinedSentence(VocabContext context, String langCode) {
-        List<WordExampleProjection> filteredExamples = loadReviewExamples(context, langCode);
-
-        if (filteredExamples.isEmpty()) {
-            throw new AppException(ErrorCode.WORD_EXAMPLE_NOT_FOUND);
-        }
-
-        WordExampleProjection example = filteredExamples.get(ThreadLocalRandom.current().nextInt(filteredExamples.size()));
-        return underlineWordInSentence(example.getSentence(), example.getTrans(), context.word().getWord());
-    }
-
     private List<WordExampleProjection> loadReviewExamples(VocabContext context, String langCode) {
         UserVocabulary userVocabulary = context.userVocabulary();
         Word word = context.word();
@@ -922,62 +834,6 @@ public class ExerciseService {
         log.debug("Review examples skipped: userVocabId={}, wordId={}, reason=no_sense",
                 userVocabulary.getId(), word.getId());
         return List.of();
-    }
-
-    private SentenceBlank blankWordInSentence(String sentence, String trans, String word) {
-        if (!StringUtils.hasText(sentence)) {
-            throw new AppException(ErrorCode.WORD_EXAMPLE_NOT_FOUND);
-        }
-
-        Pattern pattern = Pattern.compile(Pattern.quote(word), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-        Matcher matcher = pattern.matcher(sentence);
-        if (!matcher.find()) {
-            return new SentenceBlank(sentence, trans, -1);
-        }
-
-        int missIndex = matcher.start();
-        String blankSentence = sentence.substring(0, matcher.start())
-                + "_".repeat(matcher.end() - matcher.start())
-                + sentence.substring(matcher.end());
-        return new SentenceBlank(blankSentence, trans, missIndex);
-    }
-
-    private SentenceBlank replaceWordInSentence(String sentence, String trans, String word, String replacement) {
-        if (!StringUtils.hasText(sentence)) {
-            throw new AppException(ErrorCode.WORD_EXAMPLE_NOT_FOUND);
-        }
-
-        Pattern pattern = Pattern.compile(Pattern.quote(word), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-        Matcher matcher = pattern.matcher(sentence);
-        if (!matcher.find()) {
-            return new SentenceBlank(sentence, trans, -1);
-        }
-
-        int missIndex = matcher.start();
-        String replacedSentence = sentence.substring(0, matcher.start())
-                + replacement
-                + sentence.substring(matcher.end());
-        return new SentenceBlank(replacedSentence, trans, missIndex);
-    }
-
-    private SentenceBlank underlineWordInSentence(String sentence, String trans, String word) {
-        if (!StringUtils.hasText(sentence)) {
-            throw new AppException(ErrorCode.WORD_EXAMPLE_NOT_FOUND);
-        }
-
-        Pattern pattern = Pattern.compile(Pattern.quote(word), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-        Matcher matcher = pattern.matcher(sentence);
-        if (!matcher.find()) {
-            return new SentenceBlank(sentence, trans, -1);
-        }
-
-        int missIndex = matcher.start();
-        String underlinedSentence = sentence.substring(0, matcher.start())
-                + "<u>"
-                + sentence.substring(matcher.start(), matcher.end())
-                + "</u>"
-                + sentence.substring(matcher.end());
-        return new SentenceBlank(underlinedSentence, trans, missIndex);
     }
 
     private VocabReviewQuizResponse.VocabReviewQuizResponseBuilder baseResponse(
@@ -1294,9 +1150,6 @@ public class ExerciseService {
     }
 
     private record VocabContext(UserVocabulary userVocabulary, Word word, String meaning) {
-    }
-
-    private record SentenceBlank(String sentence, String trans, Integer missIndex) {
     }
 
     private record SentenceText(String sentence, String trans) {

@@ -4,6 +4,7 @@ import com.bachdauduc.vocab_app.constant.ExerciseType;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
@@ -24,6 +25,13 @@ public class BalancedReviewQuizScheduler {
     }
 
     public Map<String, ExerciseType> schedule(List<ReviewTargetEligibility> targets) {
+        return schedule(targets, Map.of());
+    }
+
+    /** Balance the pending session against quizzes already emitted, which cannot be reassigned. */
+    public Map<String, ExerciseType> schedule(
+            List<ReviewTargetEligibility> targets, Map<ExerciseType, Integer> emittedCounts
+    ) {
         if (targets == null || targets.isEmpty()) {
             return Map.of();
         }
@@ -37,41 +45,47 @@ public class BalancedReviewQuizScheduler {
             return Map.of();
         }
 
-        List<ExerciseType> vocabTypes = vocabTypes();
-        Map<ExerciseType, Integer> desired = desiredCounts(schedulable.size(), vocabTypes);
         Map<ExerciseType, Integer> assigned = new EnumMap<>(ExerciseType.class);
-        vocabTypes.forEach(type -> assigned.put(type, 0));
+        vocabTypes().forEach(type -> assigned.put(type, emittedCounts.getOrDefault(type, 0)));
 
         Map<String, ExerciseType> result = new LinkedHashMap<>();
+        Map<String, ReviewTargetEligibility> byId = new LinkedHashMap<>();
         for (ReviewTargetEligibility target : schedulable) {
-            List<ExerciseType> candidates = new ArrayList<>(target.eligibleTypes());
-            shuffle(candidates);
-            ExerciseType selected = candidates.stream()
-                    .max(Comparator
-                            .comparingInt((ExerciseType type) -> desired.getOrDefault(type, 0)
-                                    - assigned.getOrDefault(type, 0))
-                            .thenComparingInt(type -> -assigned.getOrDefault(type, 0)))
-                    .orElse(null);
-            if (selected != null) {
-                result.put(target.userVocabId(), selected);
+            if (byId.putIfAbsent(target.userVocabId(), target) != null) {
+                continue;
+            }
+            // Follow alternating target/type paths so a previous flexible target can move.
+            // Only the terminal type gains a quiz. Choosing its lowest count minimizes the
+            // incremental squared-count cost (2 * count + 1) under the eligibility constraints.
+            Map<ExerciseType, String> predecessor = new EnumMap<>(ExerciseType.class);
+            ArrayDeque<ReviewTargetEligibility> queue = new ArrayDeque<>();
+            queue.add(target);
+            while (!queue.isEmpty()) {
+                ReviewTargetEligibility current = queue.removeFirst();
+                for (ExerciseType type : current.eligibleTypes()) {
+                    if (predecessor.putIfAbsent(type, current.userVocabId()) == null) {
+                        result.forEach((id, previousType) -> {
+                            if (previousType == type) {
+                                queue.addLast(byId.get(id));
+                            }
+                        });
+                    }
+                }
+            }
+            List<ExerciseType> reachable = new ArrayList<>(predecessor.keySet());
+            shuffle(reachable);
+            ExerciseType selected = reachable.stream().min(Comparator.comparingInt(assigned::get)).orElseThrow();
+            while (selected != null) {
+                String id = predecessor.get(selected);
+                ExerciseType previous = result.put(id, selected);
                 assigned.merge(selected, 1, Integer::sum);
+                if (previous != null) {
+                    assigned.merge(previous, -1, Integer::sum);
+                }
+                selected = previous;
             }
         }
         return Map.copyOf(result);
-    }
-
-    private Map<ExerciseType, Integer> desiredCounts(int total, List<ExerciseType> types) {
-        int base = total / types.size();
-        int remainder = total % types.size();
-        List<ExerciseType> remainderOrder = new ArrayList<>(types);
-        shuffle(remainderOrder);
-
-        Map<ExerciseType, Integer> desired = new EnumMap<>(ExerciseType.class);
-        types.forEach(type -> desired.put(type, base));
-        for (int index = 0; index < remainder; index++) {
-            desired.merge(remainderOrder.get(index), 1, Integer::sum);
-        }
-        return desired;
     }
 
     private List<ExerciseType> vocabTypes() {
