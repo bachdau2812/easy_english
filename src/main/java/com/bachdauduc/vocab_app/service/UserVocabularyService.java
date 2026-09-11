@@ -48,6 +48,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -63,6 +64,14 @@ import java.util.stream.IntStream;
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class UserVocabularyService {
     private static final long MOST_WRONG_THRESHOLD = 5L;
+    // Each entry is the delay after a valid correct turn; the final turn promotes the vocabulary.
+    private static final Map<Integer, List<Duration>> CORRECT_REVIEW_INTERVALS = Map.of(
+            1, List.of(Duration.ofHours(12)),
+            2, List.of(Duration.ofDays(1)),
+            3, List.of(Duration.ofDays(2), Duration.ofDays(4)),
+            4, List.of(Duration.ofDays(5), Duration.ofDays(10)),
+            5, List.of(Duration.ofDays(14), Duration.ofDays(21), Duration.ofDays(30))
+    );
 
     UserVocabularyRepository userVocabularyRepository;
     UserVocabAttemptRepository userVocabAttemptRepository;
@@ -523,7 +532,7 @@ public class UserVocabularyService {
         int currentLevel = normalizeLevel(userVocabulary.getLevel());
         int currentTurns = userVocabulary.getCurrentLevelCorrectTurns() == null
                 ? 0
-                : userVocabulary.getCurrentLevelCorrectTurns();
+                : Math.max(0, userVocabulary.getCurrentLevelCorrectTurns());
 
         ReviewUpdate reviewUpdate = correct
                 ? nextCorrectReview(currentLevel, currentTurns, reviewTime)
@@ -539,22 +548,27 @@ public class UserVocabularyService {
 
     private ReviewUpdate nextCorrectReview(int level, int currentTurns, LocalDateTime now) {
         if (level == 6) {
-            int newTurns = currentTurns + 1;
-            return new ReviewUpdate(6, newTurns, switch (Math.min(newTurns, 4)) {
-                case 1 -> now.plusDays(14);
-                case 2 -> now.plusDays(30);
-                case 3 -> now.plusDays(60);
-                default -> now.plusDays(90);
-            });
+            return nextLevelSixReview(currentTurns, now);
         }
 
         int requiredTurns = requiredCorrectTurns(level);
-        int newTurns = currentTurns + 1;
+        // Old level-5 records may already have 3 turns under the previous quota of 4.
+        int newTurns = Math.min(currentTurns, requiredTurns - 1) + 1;
         boolean levelUp = newTurns >= requiredTurns;
         int newLevel = levelUp ? Math.min(level + 1, 6) : level;
         int savedTurns = levelUp ? 0 : newTurns;
 
-        return new ReviewUpdate(newLevel, savedTurns, correctNextReviewAt(level, levelUp, now));
+        return new ReviewUpdate(newLevel, savedTurns, correctNextReviewAt(level, newTurns, now));
+    }
+
+    private ReviewUpdate nextLevelSixReview(int currentTurns, LocalDateTime now) {
+        // At level 6 the existing per-level counter counts maintenance reviews, not promotions.
+        int maintenanceTurns = (int) Math.min((long) currentTurns + 1, Integer.MAX_VALUE);
+        return new ReviewUpdate(6, maintenanceTurns, switch (maintenanceTurns) {
+            case 1 -> now.plusDays(60);
+            case 2 -> now.plusDays(120);
+            default -> now.plusDays(180);
+        });
     }
 
     private ReviewUpdate nextWrongReview(int level, LocalDateTime now) {
@@ -572,24 +586,12 @@ public class UserVocabularyService {
         });
     }
 
-    private LocalDateTime correctNextReviewAt(int level, boolean levelUp, LocalDateTime now) {
-        return switch (level) {
-            case 1 -> levelUp ? now.plusHours(6) : now.plusHours(2);
-            case 2 -> levelUp ? now.plusHours(12) : now.plusHours(5);
-            case 3 -> levelUp ? now.plusDays(1) : now.plusHours(9);
-            case 4 -> levelUp ? now.plusDays(3) : now.plusHours(14);
-            case 5 -> levelUp ? now.plusDays(14) : now.plusDays(1);
-            default -> now.plusHours(2);
-        };
+    private LocalDateTime correctNextReviewAt(int level, int completedTurns, LocalDateTime now) {
+        return now.plus(CORRECT_REVIEW_INTERVALS.get(level).get(completedTurns - 1));
     }
 
     private int requiredCorrectTurns(int level) {
-        return switch (level) {
-            case 1, 2, 3 -> 1;
-            case 4 -> 2;
-            case 5 -> 4;
-            default -> 2;
-        };
+        return CORRECT_REVIEW_INTERVALS.get(level).size();
     }
 
     private int resolveLevel(Integer level) {

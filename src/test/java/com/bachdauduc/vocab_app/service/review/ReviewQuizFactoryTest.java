@@ -6,6 +6,8 @@ import com.bachdauduc.vocab_app.dto.response.worddata.WordSenseResponse;
 import com.bachdauduc.vocab_app.dto.response.worddata.WordSoundResponse;
 import com.bachdauduc.vocab_app.entity.UserVocabulary;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -19,6 +21,62 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ReviewQuizFactoryTest {
     private final ReviewQuizFactory factory = new ReviewQuizFactory(new Random(7));
+
+    @ParameterizedTest
+    @CsvSource(value = {
+            "1, 3, 4, 3, 4", "2, 3, 4, 3, 4", "3, 3, 4, 3, 4",
+            "4, 4, 4, 4, 7", "5, 4, 4, 4, 7", "6, 4, 4, 4, 7",
+            "null, 3, 4, 3, 4"
+    }, nullValues = "null")
+    void fillExercisesUseHigherQuotasForLongWords(
+            Integer level, int fiveMin, int fiveMax, int eightMin, int eightMax) {
+        for (ExerciseType type : List.of(ExerciseType.VOCAB_FILL_WORD_IN_SENTENCE_BLANK,
+                ExerciseType.VOCAB_FILL_MISSING_WORD_PART)) {
+            assertMaskQuota("river", level, type, fiveMin, fiveMax);
+            assertMaskQuota("elephant", level, type, eightMin, eightMax);
+            assertMaskQuota("look over", level, type, eightMin, eightMax);
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"1, 1, 2", "2, 1, 2", "3, 1, 2", "4, 3, 3", "5, 3, 3", "6, 3, 3"})
+    void preservesShortWordQuotas(int level, int fourMin, int fourMax) {
+        for (ExerciseType type : List.of(ExerciseType.VOCAB_FILL_WORD_IN_SENTENCE_BLANK,
+                ExerciseType.VOCAB_FILL_MISSING_WORD_PART)) {
+            assertMaskQuota("cat", level, type, 1, 2);
+            assertMaskQuota("book", level, type, fourMin, fourMax);
+        }
+    }
+
+    private void assertMaskQuota(String word, Integer level, ExerciseType type, int minimum, int maximum) {
+        UserVocabulary target = vocabulary(1);
+        target.setLevel(level);
+        ReviewVocabSnapshot snapshot = new ReviewVocabSnapshot(
+                1, "word-1", "sense-1", "vi", word, "noun", "meaning",
+                WordSenseResponse.builder().senseId("sense-1").build(), List.of(),
+                List.of(new ReviewExample("example-1", "This " + word + " is beautiful.", "translation")),
+                Instant.parse("2026-08-08T00:00:00Z"));
+        ReviewRequestContext context = ReviewRequestContext.create(List.of(target), Map.of(target.getId(), snapshot));
+        java.util.Set<Integer> observedCounts = new java.util.HashSet<>();
+        for (int attempt = 0; attempt < 100; attempt++) {
+            VocabReviewQuizResponse quiz = factory.create(target, snapshot, context, type);
+            int count = quiz.getMetadata().size();
+            assertThat(count).as("%s level %s: %s", type, level, word).isBetween(minimum, maximum);
+            observedCounts.add(count);
+            assertThat(quiz.getMaskedWord()).startsWith(word.substring(0, 1));
+            StringBuilder restored = new StringBuilder(quiz.getMaskedWord());
+            quiz.getMetadata().forEach((index, character) -> {
+                assertThat(word.charAt(index)).isNotEqualTo(' ');
+                assertThat(quiz.getMaskedWord().charAt(index)).isEqualTo('_');
+                restored.setCharAt(index, character.charAt(0));
+            });
+            assertThat(restored.toString()).isEqualTo(word);
+            if (type == ExerciseType.VOCAB_FILL_WORD_IN_SENTENCE_BLANK) {
+                assertThat(quiz.getSentence()).isEqualTo("This " + quiz.getMaskedWord() + " is beautiful.");
+            }
+        }
+        assertThat(observedCounts).contains(minimum, maximum);
+    }
 
     @Test
     void createsEveryEligibleVocabQuizTypeFromOneRequestContext() {

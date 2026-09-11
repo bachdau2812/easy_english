@@ -21,6 +21,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.InjectMocks;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -35,6 +36,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -71,7 +73,7 @@ class UserVocabularyReviewScheduleServiceTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"1, 2", "2, 3", "3, 4"})
+    @CsvSource({"1, 2", "2, 3"})
     void oneCorrectReviewAdvancesEarlyLevels(int currentLevel, int expectedLevel) {
         UserVocabulary vocabulary = vocabulary(currentLevel, 0);
         stubVocabulary(vocabulary);
@@ -84,12 +86,15 @@ class UserVocabularyReviewScheduleServiceTest {
 
     @ParameterizedTest
     @CsvSource({
+            "3, 0, 3, 1",
+            "3, 1, 4, 0",
             "4, 0, 4, 1",
             "4, 1, 5, 0",
-            "5, 2, 5, 3",
-            "5, 3, 6, 0"
+            "5, 0, 5, 1",
+            "5, 1, 5, 2",
+            "5, 2, 6, 0"
     })
-    void preservesHigherLevelThresholds(
+    void appliesNewPromotionQuotasWhenNextReviewIsNull(
             int currentLevel,
             int currentTurns,
             int expectedLevel,
@@ -117,12 +122,17 @@ class UserVocabularyReviewScheduleServiceTest {
 
     @ParameterizedTest
     @CsvSource({
-            "4, 0, 4, 1, 14",
-            "4, 1, 5, 0, 72",
-            "5, 2, 5, 3, 24",
-            "5, 3, 6, 0, 336"
+            "1, 0, 2, 0, 12",
+            "2, 0, 3, 0, 24",
+            "3, 0, 3, 1, 48",
+            "3, 1, 4, 0, 96",
+            "4, 0, 4, 1, 120",
+            "4, 1, 5, 0, 240",
+            "5, 0, 5, 1, 336",
+            "5, 1, 5, 2, 504",
+            "5, 2, 6, 0, 720"
     })
-    void usesExactHigherLevelCorrectIntervals(
+    void usesExactCorrectIntervalsAndResetsCounterOnPromotion(
             int currentLevel,
             int currentTurns,
             int expectedLevel,
@@ -140,19 +150,20 @@ class UserVocabularyReviewScheduleServiceTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"4, 12", "5, 24"})
-    void usesExactHigherLevelWrongIntervals(int level, long expectedHours) {
+    @CsvSource({"1, 1, 1", "2, 2, 4", "3, 3, 6", "4, 4, 12", "5, 5, 24", "6, 5, 72"})
+    void wrongReviewResetsCounterAndPreservesExistingRules(int level, int expectedLevel, long expectedHours) {
         UserVocabulary vocabulary = dueVocabulary(level, 1);
         stubVocabulary(vocabulary);
         service.submitReviewAttempt(reviewRequest(false));
 
-        assertThat(vocabulary.getLevel()).isEqualTo(level);
+        assertThat(vocabulary.getLevel()).isEqualTo(expectedLevel);
         assertThat(vocabulary.getCurrentLevelCorrectTurns()).isZero();
         assertThat(vocabulary.getNextReviewAt()).isEqualTo(NOW.plusHours(expectedHours));
     }
 
     @ParameterizedTest
-    @CsvSource({"0, 1, 14", "1, 2, 30", "2, 3, 60", "3, 4, 90"})
+    @CsvSource({"0, 1, 60", "1, 2, 120", "2, 3, 180", "3, 4, 180", "100, 101, 180",
+            "2147483647, 2147483647, 180"})
     void usesExactLevelSixIntervals(int currentTurns, int expectedTurns, long expectedDays) {
         UserVocabulary vocabulary = dueVocabulary(6, currentTurns);
         stubVocabulary(vocabulary);
@@ -186,7 +197,101 @@ class UserVocabularyReviewScheduleServiceTest {
 
         assertThat(vocabulary.getLevel()).isEqualTo(4);
         assertThat(vocabulary.getCurrentLevelCorrectTurns()).isEqualTo(1);
-        assertThat(vocabulary.getNextReviewAt()).isEqualTo(NOW.plusHours(14));
+        assertThat(vocabulary.getNextReviewAt()).isEqualTo(NOW.plusDays(5));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"1, true", "1, false", "2, true", "2, false", "3, true", "3, false",
+            "4, true", "4, false", "5, true", "5, false", "6, true", "6, false"})
+    void earlyPracticeRecordsResultWithoutChangingProgress(int level, boolean correct) {
+        int turns = level <= 2 ? 0 : 1;
+        UserVocabulary vocabulary = vocabulary(level, turns);
+        LocalDateTime scheduled = NOW.plusNanos(1);
+        vocabulary.setNextReviewAt(scheduled);
+        stubVocabulary(vocabulary);
+
+        service.submitReviewAttempt(reviewRequest(correct));
+
+        assertThat(vocabulary.getLevel()).isEqualTo(level);
+        assertThat(vocabulary.getCurrentLevelCorrectTurns()).isEqualTo(turns);
+        assertThat(vocabulary.getNextReviewAt()).isEqualTo(scheduled);
+        verify(userVocabularyRepository, never()).save(any(UserVocabulary.class));
+        ArgumentCaptor<UserVocabAttempt> attempt = ArgumentCaptor.forClass(UserVocabAttempt.class);
+        verify(userVocabAttemptRepository).save(attempt.capture());
+        assertThat(attempt.getValue().getCorrect()).isEqualTo(correct);
+    }
+
+    @Test
+    void correctReviewAtExactDueTimeCounts() {
+        UserVocabulary vocabulary = vocabulary(3, 1);
+        vocabulary.setNextReviewAt(NOW);
+        stubVocabulary(vocabulary);
+
+        service.submitReviewAttempt(correctRequest());
+
+        assertThat(vocabulary.getLevel()).isEqualTo(4);
+        assertThat(vocabulary.getCurrentLevelCorrectTurns()).isZero();
+        assertThat(vocabulary.getNextReviewAt()).isEqualTo(NOW.plusDays(4));
+    }
+
+    @Test
+    void dueCorrectWrongCorrectRestartsLevelFiveCounter() {
+        UserVocabulary vocabulary = dueVocabulary(5, 0);
+        stubVocabulary(vocabulary);
+        service.submitReviewAttempt(correctRequest());
+        assertThat(vocabulary.getCurrentLevelCorrectTurns()).isEqualTo(1);
+
+        advanceClockTo(vocabulary.getNextReviewAt());
+        LocalDateTime wrongTime = vocabulary.getNextReviewAt();
+        service.submitReviewAttempt(reviewRequest(false));
+        assertThat(vocabulary.getLevel()).isEqualTo(5);
+        assertThat(vocabulary.getCurrentLevelCorrectTurns()).isZero();
+        assertThat(vocabulary.getNextReviewAt()).isEqualTo(wrongTime.plusDays(1));
+
+        advanceClockTo(vocabulary.getNextReviewAt());
+        LocalDateTime retryTime = vocabulary.getNextReviewAt();
+        service.submitReviewAttempt(correctRequest());
+        assertThat(vocabulary.getLevel()).isEqualTo(5);
+        assertThat(vocabulary.getCurrentLevelCorrectTurns()).isEqualTo(1);
+        assertThat(vocabulary.getNextReviewAt()).isEqualTo(retryTime.plusDays(14));
+        verify(userVocabAttemptRepository, times(3)).save(any(UserVocabAttempt.class));
+    }
+
+    @Test
+    void exactlyNineDueCorrectReviewsReachLevelSixThenStartMaintenance() {
+        UserVocabulary vocabulary = dueVocabulary(1, 0);
+        stubVocabulary(vocabulary);
+        int[] levels = {2, 3, 3, 4, 4, 5, 5, 5, 6, 6, 6, 6, 6};
+        int[] turns = {0, 0, 1, 0, 1, 0, 1, 2, 0, 1, 2, 3, 4};
+        long[] hours = {12, 24, 48, 96, 120, 240, 336, 504, 720, 1440, 2880, 4320, 4320};
+        LocalDateTime reviewTime = NOW;
+        for (int index = 0; index < levels.length; index++) {
+            advanceClockTo(reviewTime);
+            service.submitReviewAttempt(correctRequest());
+            assertThat(vocabulary.getLevel()).as("review %s", index + 1).isEqualTo(levels[index]);
+            assertThat(vocabulary.getCurrentLevelCorrectTurns()).isEqualTo(turns[index]);
+            assertThat(vocabulary.getNextReviewAt()).isEqualTo(reviewTime.plusHours(hours[index]));
+            reviewTime = vocabulary.getNextReviewAt();
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource(value = {"null, 5, 1, 14", "-1, 5, 1, 14", "3, 6, 0, 30",
+            "2147483647, 6, 0, 30"}, nullValues = "null")
+    void handlesNullOrLegacyLevelFiveCounters(Integer turns, int expectedLevel, int expectedTurns, int days) {
+        UserVocabulary vocabulary = dueVocabulary(5, 0);
+        vocabulary.setCurrentLevelCorrectTurns(turns);
+        stubVocabulary(vocabulary);
+
+        service.submitReviewAttempt(correctRequest());
+
+        assertThat(vocabulary.getLevel()).isEqualTo(expectedLevel);
+        assertThat(vocabulary.getCurrentLevelCorrectTurns()).isEqualTo(expectedTurns);
+        assertThat(vocabulary.getNextReviewAt()).isEqualTo(NOW.plusDays(days));
+    }
+
+    private void advanceClockTo(LocalDateTime time) {
+        when(clock.instant()).thenReturn(time.atZone(APP_ZONE).toInstant());
     }
 
     @Test

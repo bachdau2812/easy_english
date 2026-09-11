@@ -283,7 +283,7 @@ public class ReviewQuizFactory {
         if (length == 4) {
             return highLevel ? 3 : randomBetween(1, 2);
         }
-        return highLevel ? randomBetween(3, Math.max(3, length - 1)) : randomBetween(1, 2);
+        return highLevel ? randomBetween(4, Math.max(4, length - 1)) : randomBetween(3, 4);
     }
 
     private int randomBetween(int minimum, int maximum) {
