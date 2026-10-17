@@ -29,8 +29,9 @@ public interface UserVocabularyRepository extends JpaRepository<UserVocabulary, 
             SELECT w.word AS word, w.pos AS pos, uv.level AS level,
                 COALESCE(
                     CASE WHEN saved.lang_code = :langCode
-                         THEN NULLIF(TRIM(saved.full_localized_definition), '') END,
-                    (SELECT NULLIF(TRIM(trans.full_localized_definition), '')
+                              AND NULLIF(TRIM(saved.full_localized_definition), '') IS NOT NULL
+                         THEN saved.full_localized_definition END,
+                    (SELECT trans.full_localized_definition
                      FROM word_sense_localizations trans
                      WHERE trans.sense_id = ws.id AND trans.word_id = w.id
                          AND trans.lang_code = :langCode
@@ -38,13 +39,30 @@ public interface UserVocabularyRepository extends JpaRepository<UserVocabulary, 
                      ORDER BY trans.id ASC
                      LIMIT 1),
                     ws.definition, ''
-                ) AS wordSense
+                ) AS wordSense,
+                (SELECT we.text FROM word_examples we
+                 WHERE we.word_id = w.id
+                     AND we.sense_id = CASE
+                         WHEN saved.id IS NOT NULL AND NULLIF(TRIM(saved.sense_id), '') IS NULL
+                             THEN saved.id ELSE ws.id END
+                     AND NULLIF(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(we.text,
+                         CHAR(13), ''), CHAR(10), ''), CHAR(9), ''), CHAR(11), ''), CHAR(12), '')), '') IS NOT NULL
+                 ORDER BY we.id ASC LIMIT 1) AS example1,
+                (SELECT we.text FROM word_examples we
+                 WHERE we.word_id = w.id
+                     AND we.sense_id = CASE
+                         WHEN saved.id IS NOT NULL AND NULLIF(TRIM(saved.sense_id), '') IS NULL
+                             THEN saved.id ELSE ws.id END
+                     AND NULLIF(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(we.text,
+                         CHAR(13), ''), CHAR(10), ''), CHAR(9), ''), CHAR(11), ''), CHAR(12), '')), '') IS NOT NULL
+                 ORDER BY we.id ASC LIMIT 1 OFFSET 1) AS example2
             FROM user_vocabularies uv
             JOIN words w ON w.id = uv.word_id
             LEFT JOIN word_sense_localizations saved
                 ON saved.id = uv.sense_localized_id AND saved.word_id = uv.word_id
             LEFT JOIN word_senses ws
-                ON ws.id = COALESCE(uv.sense_id, saved.sense_id) AND ws.word_id = uv.word_id
+                ON ws.id = COALESCE(NULLIF(TRIM(uv.sense_id), ''), saved.sense_id)
+                    AND ws.word_id = uv.word_id
             WHERE uv.user_id = :userId
             ORDER BY w.normalized_word ASC, w.word ASC, uv.id ASC
             """, nativeQuery = true)

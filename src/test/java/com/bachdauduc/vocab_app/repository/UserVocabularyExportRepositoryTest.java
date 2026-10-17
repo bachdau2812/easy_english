@@ -18,6 +18,8 @@ class UserVocabularyExportRepositoryTest {
     @BeforeEach
     void setUp() {
         jdbc.update("DELETE FROM user_vocabularies");
+        jdbc.update("DELETE FROM word_example_localizations");
+        jdbc.update("DELETE FROM word_examples");
         jdbc.update("DELETE FROM word_sense_localizations");
         jdbc.update("DELETE FROM word_senses");
         jdbc.update("DELETE FROM words");
@@ -89,6 +91,75 @@ class UserVocabularyExportRepositoryTest {
 
         assertThat(result.getContent().getFirst().getWordSense()).isEqualTo("Một loại quả có vỏ đỏ hoặc xanh.");
         assertThat(result.getContent().getLast().getWordSense()).isEmpty();
+    }
+
+    @Test
+    void preservesCompleteMultilineVietnameseMeaningIncludingWhitespace() {
+        String fullMeaning = "  Nghĩa đầy đủ thứ nhất.\nNghĩa đầy đủ thứ hai; không được cắt bỏ.  ";
+        localization("loc-multiline", "sense-2", "vi", "Nghĩa ngắn", fullMeaning);
+
+        var result = repository.findUserVocabularyForExport("user-1", "vi", PageRequest.of(0, 500));
+
+        assertThat(result.getContent().get(1).getWordSense()).isEqualTo(fullMeaning);
+    }
+
+    @Test
+    void blankLegacySenseIdDoesNotHideSavedLocalizationsStandardSense() {
+        vocabulary("saved-7", "user-1", "", "loc-fr", 1);
+
+        var result = repository.findUserVocabularyForExport("user-1", "vi", PageRequest.of(0, 500));
+
+        assertThat(result.getContent().getLast().getWordSense())
+                .isEqualTo(result.getContent().getFirst().getWordSense())
+                .isNotBlank();
+    }
+
+    @Test
+    void selectsTwoNonblankExamplesOfExactStandardOrLocalizedSenseInIdOrder() {
+        example("ex-00", "word-1", "sense-1", "   ");
+        example("ex-00a", "word-1", "sense-1", "\r\n\t ");
+        example("ex-00b", "word-1", "sense-1", null);
+        example("ex-00c", "word-1", "sense-1", "\f");
+        example("ex-00d", "word-1", "sense-1", "\u000B");
+        example("ex-01", "word-1", "sense-1", "I eat an apple.");
+        example("ex-02", "word-1", "sense-1", "This apple is red.");
+        example("ex-03", "word-1", "sense-1", "A third apple sentence.");
+        example("ex-04", "word-1", "sense-2", "Apple makes computers.");
+        example("ex-05", "word-1", "loc-saved", "A localized example.");
+        example("ex-06", "word-1", "loc-saved", "Another localized example.");
+        example("ex-07", "word-1", null, "A word-level example must not leak.");
+        example("ex-000", "other-word", "sense-1", "An example from another word must not leak.");
+
+        var result = repository.findUserVocabularyForExport("user-1", "vi", PageRequest.of(0, 500));
+
+        assertThat(result.getContent()).extracting(UserVocabularyExportProjection::getExample1)
+                .containsExactly("I eat an apple.", "Apple makes computers.", "A localized example.",
+                        null, null, "I eat an apple.");
+        assertThat(result.getContent()).extracting(UserVocabularyExportProjection::getExample2)
+                .containsExactly("This apple is red.", null, "Another localized example.",
+                        null, null, "This apple is red.");
+        var nextPage = repository.findUserVocabularyForExport("user-1", "vi", PageRequest.of(1, 2));
+        assertThat(nextPage.getContent().getFirst().getExample2()).isEqualTo("Another localized example.");
+        assertThat(result.getContent()).hasSize(6);
+    }
+
+    @Test
+    void doesNotUseOtherLocalizationsExamplesForSavedStandaloneSense() {
+        localization("loc-other", null, "vi", "Nghĩa khác", "Một nghĩa độc lập khác");
+        example("ex-01", "word-1", "loc-other", "An unrelated localized example.");
+        example("ex-02", "word-1", "loc-saved", "The saved localized example.");
+
+        var result = repository.findUserVocabularyForExport("user-1", "vi", PageRequest.of(0, 500));
+
+        assertThat(result.getContent().get(2).getExample1()).isEqualTo("The saved localized example.");
+        assertThat(result.getContent().get(2).getExample2()).isNull();
+    }
+
+    private void example(String id, String wordId, String senseId, String text) {
+        jdbc.update("""
+                INSERT INTO word_examples (id, word_id, sense_id, text, created_at, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, id, wordId, senseId, text);
     }
 
     private void sense(String id, String definition) {

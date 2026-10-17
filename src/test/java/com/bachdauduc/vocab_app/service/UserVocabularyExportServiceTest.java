@@ -34,6 +34,9 @@ class UserVocabularyExportServiceTest {
         when(userInfoRepository.existsById("user-1")).thenReturn(true);
         var first = item("Apple", "noun", "quả táo", 2);
         var second = item("Apple", "noun", "một nghĩa khác", 5);
+        when(first.getExample1()).thenReturn("I eat an apple.");
+        when(first.getExample2()).thenReturn("This apple is red.");
+        when(second.getExample1()).thenReturn("Apple makes computers.");
         var page0 = PageRequest.of(0, 500);
         var page1 = PageRequest.of(1, 500);
         when(userVocabularyRepository.findUserVocabularyForExport("user-1", "vi", page0))
@@ -47,9 +50,10 @@ class UserVocabularyExportServiceTest {
             assertThat(workbook.getNumberOfSheets()).isEqualTo(1);
             var sheet = workbook.getSheet("My Vocabulary");
             assertThat(sheet.getPhysicalNumberOfRows()).isEqualTo(3);
-            assertThat(IntStream.range(0, 7).mapToObj(i -> sheet.getRow(0).getCell(i).getStringCellValue()))
+            assertThat(sheet.getRow(0).getLastCellNum()).isEqualTo((short) 8);
+            assertThat(IntStream.range(0, 8).mapToObj(i -> sheet.getRow(0).getCell(i).getStringCellValue()))
                     .containsExactly("meaning_practice", "word", "pos", "word_sense",
-                            "word_practice", "level", "langcode");
+                            "word_practice", "level", "langcode", "examples");
             var row = sheet.getRow(1);
             assertThat(row.getCell(0).getCellType()).isEqualTo(CellType.BLANK);
             assertThat(row.getCell(1).getStringCellValue()).isEqualTo("Apple");
@@ -59,6 +63,10 @@ class UserVocabularyExportServiceTest {
             assertThat(row.getCell(5).getCellType()).isEqualTo(CellType.NUMERIC);
             assertThat(row.getCell(5).getNumericCellValue()).isEqualTo(2);
             assertThat(row.getCell(6).getStringCellValue()).isEqualTo("vi");
+            assertThat(row.getCell(7).getStringCellValue()).isEqualTo("- I eat an apple.\n- This apple is red.");
+            assertThat(row.getCell(7).getCellStyle().getWrapText()).isTrue();
+            assertThat(row.getHeightInPoints()).isGreaterThan(sheet.getDefaultRowHeightInPoints());
+            assertThat(sheet.getRow(2).getCell(7).getStringCellValue()).isEqualTo("- Apple makes computers.");
             assertThat(sheet.getRow(2).getCell(3).getStringCellValue()).isEqualTo("một nghĩa khác");
             assertThat(sheet.getPaneInformation().isFreezePane()).isTrue();
         }
@@ -74,7 +82,7 @@ class UserVocabularyExportServiceTest {
         try (var workbook = WorkbookFactory.create(new ByteArrayInputStream(service.exportVocabulary("user-1", null)))) {
             var sheet = workbook.getSheetAt(0);
             assertThat(sheet.getPhysicalNumberOfRows()).isEqualTo(1);
-            assertThat(sheet.getRow(0).getLastCellNum()).isEqualTo((short) 7);
+            assertThat(sheet.getRow(0).getLastCellNum()).isEqualTo((short) 8);
         }
     }
 
@@ -93,6 +101,8 @@ class UserVocabularyExportServiceTest {
             assertThat(row.getCell(3).getStringCellValue()).isEqualTo("a".repeat(32766));
             assertThat(row.getCell(5).getCellType()).isEqualTo(CellType.BLANK);
             assertThat(row.getCell(6).getStringCellValue()).isEqualTo("fr");
+            assertThat(row.getCell(7).getStringCellValue()).isEmpty();
+            assertThat(row.getHeightInPoints()).isLessThanOrEqualTo(409.5f);
         }
     }
 
@@ -102,6 +112,46 @@ class UserVocabularyExportServiceTest {
                 .isInstanceOfSatisfying(AppException.class, exception ->
                         assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.USER_NOT_FOUND));
         verifyNoInteractions(userVocabularyRepository);
+    }
+
+    @Test
+    void displaysAllLinesOfFullMeaningWithWrappedTextAndExpandedRow() throws Exception {
+        when(userInfoRepository.existsById("user-1")).thenReturn(true);
+        String fullMeaning = "Nghĩa đầy đủ thứ nhất.\nNghĩa đầy đủ thứ hai.\nNghĩa đầy đủ thứ ba.";
+        var vocabulary = item("Apple", "noun", fullMeaning, 1);
+        when(userVocabularyRepository.findUserVocabularyForExport("user-1", "vi", PageRequest.of(0, 500)))
+                .thenReturn(new SliceImpl<>(List.of(vocabulary)));
+
+        try (var workbook = WorkbookFactory.create(new ByteArrayInputStream(service.exportVocabulary("user-1", "")))) {
+            var sheet = workbook.getSheetAt(0);
+            var row = sheet.getRow(1);
+            assertThat(row.getCell(3).getStringCellValue()).isEqualTo(fullMeaning);
+            assertThat(row.getCell(3).getCellStyle().getWrapText()).isTrue();
+            assertThat(row.getHeightInPoints()).isGreaterThanOrEqualTo(3 * sheet.getDefaultRowHeightInPoints());
+        }
+    }
+
+    @Test
+    void keepsRowsReadableWithoutMeaningOrExamplesAndFormatsOnlyNonblankSentences() throws Exception {
+        when(userInfoRepository.existsById("user-1")).thenReturn(true);
+        var empty = item("Apple", "noun", null, 1);
+        when(empty.getExample2()).thenReturn("\r\n\t ");
+        var sentence = item("Apple", "noun", null, 2);
+        when(sentence.getExample1()).thenReturn("  =1+1\r\n  remains literal text.  ");
+        when(sentence.getExample2()).thenReturn("  ");
+        when(userVocabularyRepository.findUserVocabularyForExport("user-1", "vi", PageRequest.of(0, 500)))
+                .thenReturn(new SliceImpl<>(List.of(empty, sentence)));
+
+        try (var workbook = WorkbookFactory.create(new ByteArrayInputStream(service.exportVocabulary("user-1", "vi")))) {
+            var sheet = workbook.getSheetAt(0);
+            var emptyRow = sheet.getRow(1);
+            assertThat(emptyRow.getCell(3).getStringCellValue()).isEmpty();
+            assertThat(emptyRow.getCell(7).getStringCellValue()).isEmpty();
+            assertThat(emptyRow.getHeightInPoints()).isGreaterThanOrEqualTo(sheet.getDefaultRowHeightInPoints());
+            assertThat(sheet.getRow(2).getCell(7).getCellType()).isEqualTo(CellType.STRING);
+            assertThat(sheet.getRow(2).getCell(7).getStringCellValue())
+                    .isEqualTo("- =1+1 remains literal text.");
+        }
     }
 
     private UserVocabularyExportProjection item(String word, String pos, String meaning, Integer level) {

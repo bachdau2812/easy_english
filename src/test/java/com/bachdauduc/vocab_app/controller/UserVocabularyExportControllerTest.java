@@ -57,6 +57,7 @@ class UserVocabularyExportControllerTest {
         assertThat(response.getHeader(HttpHeaders.CONTENT_LENGTH)).isEqualTo(String.valueOf(file.length));
         try (var workbook = WorkbookFactory.create(new ByteArrayInputStream(file))) {
             assertThat(workbook.getSheetAt(0).getRow(0).getCell(0).getStringCellValue()).isEqualTo("meaning_practice");
+            assertThat(workbook.getSheetAt(0).getRow(0).getCell(7).getStringCellValue()).isEqualTo("examples");
         }
         verify(repository).findUserVocabularyForExport("owner", "vi", PageRequest.of(0, 500));
         verifyNoMoreInteractions(repository);

@@ -8,4 +8,8 @@ public interface UserVocabularyExportProjection {
     String getWordSense();
 
     Integer getLevel();
+
+    String getExample1();
+
+    String getExample2();
 }
