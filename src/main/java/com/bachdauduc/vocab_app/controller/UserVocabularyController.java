@@ -4,12 +4,15 @@ import com.bachdauduc.vocab_app.dto.request.uservocabulary.SubmitReviewAttemptRe
 import com.bachdauduc.vocab_app.dto.request.uservocabulary.UserSearchHistoryRequest;
 import com.bachdauduc.vocab_app.dto.request.uservocabulary.UserVocabularyRequest;
 import com.bachdauduc.vocab_app.dto.response.ApiResponse;
+import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyExportResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserSearchHistoryResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabAttemptResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyInfoResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyStatisticResponse;
 import com.bachdauduc.vocab_app.dto.response.worddata.WordResponse;
+import com.bachdauduc.vocab_app.exception.AppException;
+import com.bachdauduc.vocab_app.exception.ErrorCode;
 import com.bachdauduc.vocab_app.service.UserVocabularyService;
 import jakarta.validation.Valid;
 import lombok.AccessLevel;
@@ -29,6 +32,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
+import java.util.List;
 
 @Slf4j
 @RestController
@@ -85,6 +89,20 @@ public class UserVocabularyController {
         }
         return success("Search user vocabularies successfully",
                 userVocabularyService.searchUserVocabulary(userId, text, page, limit));
+    }
+
+    @GetMapping("/all")
+    public ApiResponse<List<UserVocabularyExportResponse>> getAllUserVocabularies(
+            Authentication authentication,
+            @RequestParam(defaultValue = "vi") String langCode
+    ) {
+        if (authentication == null || !authentication.isAuthenticated()) {
+            throw new AppException(ErrorCode.UNAUTHENTICATED);
+        }
+        String userId = authentication.getName();
+        log.info("Request received: action=getAllUserVocabularies, userId={}, langCode={}", userId, langCode);
+        return success("Get user vocabularies successfully",
+                userVocabularyService.getAllUserVocabularies(userId, langCode));
     }
 
     @GetMapping("/search-history")

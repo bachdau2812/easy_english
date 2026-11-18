@@ -1,5 +1,6 @@
 package com.bachdauduc.vocab_app.service;
 
+import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyExportResponse;
 import com.bachdauduc.vocab_app.exception.AppException;
 import com.bachdauduc.vocab_app.exception.ErrorCode;
 import com.bachdauduc.vocab_app.repository.UserInfoRepository;
@@ -20,13 +21,9 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.util.StringUtils;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.Locale;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 @Slf4j
 @Service
@@ -49,7 +46,7 @@ public class UserVocabularyExportService {
         if (!userInfoRepository.existsById(userId)) {
             throw new AppException(ErrorCode.USER_NOT_FOUND);
         }
-        String language = StringUtils.hasText(langCode) ? langCode.trim().toLowerCase(Locale.ROOT) : "vi";
+        String language = UserVocabularyExportMapper.normalizeLanguage(langCode);
 
         try (SXSSFWorkbook workbook = new SXSSFWorkbook(100);
              ByteArrayOutputStream output = new ByteArrayOutputStream()) {
@@ -74,24 +71,23 @@ public class UserVocabularyExportService {
                         rowIndex = 1;
                     }
                     Row row = sheet.createRow(rowIndex++);
+                    UserVocabularyExportResponse exportResponse =
+                            UserVocabularyExportMapper.toResponse(vocabulary, language);
                     // Explicit string cells keep values beginning with '=' as text, not formulas.
                     row.createCell(0);
-                    row.createCell(1).setCellValue(cellText(vocabulary.getWord()));
-                    row.createCell(2).setCellValue(cellText(vocabulary.getPos()));
-                    String meaning = cellText(vocabulary.getWordSense());
+                    row.createCell(1).setCellValue(exportResponse.getWord());
+                    row.createCell(2).setCellValue(exportResponse.getPos());
+                    String meaning = exportResponse.getWordSense();
                     row.createCell(3).setCellValue(meaning);
                     row.getCell(3).setCellStyle(wrappedStyle);
                     row.createCell(4);
-                    if (vocabulary.getLevel() != null) {
-                        row.createCell(5).setCellValue(vocabulary.getLevel());
+                    if (exportResponse.getLevel() != null) {
+                        row.createCell(5).setCellValue(exportResponse.getLevel());
                     } else {
                         row.createCell(5);
                     }
-                    row.createCell(6).setCellValue(language);
-                    String examples = cellText(Stream.of(vocabulary.getExample1(), vocabulary.getExample2())
-                            .filter(StringUtils::hasText)
-                            .map(example -> "- " + example.strip().replaceAll("\\s*\\R\\s*", " "))
-                            .collect(Collectors.joining("\n")));
+                    row.createCell(6).setCellValue(exportResponse.getLangCode());
+                    String examples = exportResponse.getExamples();
                     row.createCell(7).setCellValue(examples);
                     row.getCell(7).setCellStyle(wrappedStyle);
                     int lines = Math.max(wrappedLines(meaning), wrappedLines(examples));
@@ -130,15 +126,4 @@ public class UserVocabularyExportService {
                 .sum());
     }
 
-    private String cellText(String value) {
-        if (value == null) {
-            return "";
-        }
-        int maxLength = SpreadsheetVersion.EXCEL2007.getMaxTextLength();
-        if (value.length() <= maxLength) {
-            return value;
-        }
-        int end = Character.isHighSurrogate(value.charAt(maxLength - 1)) ? maxLength - 1 : maxLength;
-        return value.substring(0, end);
-    }
 }

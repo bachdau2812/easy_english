@@ -8,6 +8,7 @@ import com.bachdauduc.vocab_app.dto.request.uservocabulary.UserVocabularyRequest
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserSearchHistoryResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabAttemptResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyResponse;
+import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyExportResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularySearchResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyAutocompleteResponse;
 import com.bachdauduc.vocab_app.dto.response.uservocabulary.UserVocabularyStatisticResponse;
@@ -34,6 +35,7 @@ import com.bachdauduc.vocab_app.repository.projection.UserSearchHistoryProjectio
 import com.bachdauduc.vocab_app.repository.projection.UserVocabAttemptProjection;
 import com.bachdauduc.vocab_app.repository.projection.UserVocabStatisticProjection;
 import com.bachdauduc.vocab_app.repository.projection.UserVocabularyProjection;
+import com.bachdauduc.vocab_app.repository.projection.UserVocabularyExportProjection;
 import com.bachdauduc.vocab_app.repository.projection.UserVocabularyLevelQuantityProjection;
 import com.bachdauduc.vocab_app.repository.projection.WrongVocabProjection;
 import com.bachdauduc.vocab_app.service.review.ReviewAvailabilityService;
@@ -43,6 +45,7 @@ import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -51,6 +54,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -64,6 +68,7 @@ import java.util.stream.IntStream;
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class UserVocabularyService {
     private static final long MOST_WRONG_THRESHOLD = 5L;
+    private static final int USER_VOCABULARY_LIST_BATCH_SIZE = 500;
     // Each entry is the delay after a valid correct turn; the final turn promotes the vocabulary.
     private static final Map<Integer, List<Duration>> CORRECT_REVIEW_INTERVALS = Map.of(
             1, List.of(Duration.ofHours(12)),
@@ -224,6 +229,27 @@ public class UserVocabularyService {
                 .map(this::toUserVocabularyResponse);
         log.info("User vocabularies by level loaded: userId={}, level={}, resultCount={}, totalElements={}",
                 userId, level, response.getNumberOfElements(), response.getTotalElements());
+        return response;
+    }
+
+    @Transactional(readOnly = true)
+    public List<UserVocabularyExportResponse> getAllUserVocabularies(String userId, String langCode) {
+        log.debug("Start service: method=getAllUserVocabularies, userId={}, langCode={}", userId, langCode);
+        assertUserExists(userId);
+        String language = UserVocabularyExportMapper.normalizeLanguage(langCode);
+        List<UserVocabularyExportResponse> response = new ArrayList<>();
+        PageRequest pageable = PageRequest.of(0, USER_VOCABULARY_LIST_BATCH_SIZE);
+        Slice<UserVocabularyExportProjection> batch;
+        do {
+            batch = userVocabularyRepository.findUserVocabularyForExport(userId, language, pageable);
+            for (UserVocabularyExportProjection vocabulary : batch) {
+                response.add(UserVocabularyExportMapper.toResponse(vocabulary, language));
+            }
+            pageable = pageable.next();
+        } while (batch.hasNext());
+
+        log.info("All user vocabularies loaded: userId={}, langCode={}, resultCount={}",
+                userId, language, response.size());
         return response;
     }
 

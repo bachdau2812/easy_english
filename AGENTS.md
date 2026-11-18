@@ -36,6 +36,8 @@ Responses should use `ApiResponse<T>`. Business errors should throw `AppExceptio
 
 ## Testing Guidelines
 
+For behavior changes, write a focused test first and confirm it fails for the intended missing behavior; implement the change, rerun the focused test, then run the full suite. Report pre-existing test failures separately. If the Maven wrapper cannot start, use the installed `mvn` command and report the wrapper issue.
+
 Tests use JUnit 5 with Spring Boot test support. Add focused tests for new service logic, security behavior, repository queries, and validation. Prefer deterministic tests that do not require real SMTP, Firebase, Azure, or production data. Run `.\mvnw.cmd test` before submitting changes.
 
 ## Commit & Pull Request Guidelines
